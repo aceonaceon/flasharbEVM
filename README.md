@@ -23,7 +23,7 @@
 ```bash
 git clone https://github.com/aceonaceon/flasharbEVM /opt/flasharb
 cd /opt/flasharb
-cp .env.example .env               # 填入 TUNNEL_TOKEN（見下面）
+cp .env.example .env               # 網頁要對外時再填 TUNNEL_TOKEN（見下面）
 docker compose pull && docker compose up -d
 docker compose logs -f shadow      # 看進度
 ```
@@ -38,7 +38,7 @@ docker compose logs -f shadow      # 看進度
 
 側錄器內建一個只讀網頁（port 8088，只在 compose 內部網路開放），對外由 Cloudflare Tunnel 轉進來，主機不開任何 port：
 
-1. Cloudflare Zero Trust → Networks → Tunnels → 建立一個 tunnel，複製 token 寫進 `.env` 的 `TUNNEL_TOKEN`。
+1. Cloudflare Zero Trust → Networks → Tunnels → 建立一個 tunnel，複製 token 寫進 `.env` 的 `TUNNEL_TOKEN`，並加上 `COMPOSE_PROFILES=tunnel`，再 `docker compose up -d`。
 2. 在這個 tunnel 加一個 Public Hostname，例如 `arb.你的網域`，Service 填 `http://shadow:8088`。
 3. Zero Trust → Access → Applications 新增這個子網域，Policy 只放行你自己的 email。
 

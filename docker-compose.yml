@@ -26,13 +26,15 @@ services:
   # Cloudflare Tunnel：把子網域轉到 http://shadow:8088。
   # 在 Cloudflare Zero Trust 建好 tunnel 後，把 token 寫進 .env 的 TUNNEL_TOKEN。
   # 登入保護用 Cloudflare Access（只放行你的 email），在 Cloudflare 後台設定。
+  # 有 token 之後，在 .env 加 COMPOSE_PROFILES=tunnel 才會啟動；側錄器本身不依賴它。
   tunnel:
+    profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest
     container_name: flasharb-tunnel
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN:?在 .env 設定 TUNNEL_TOKEN}
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
     depends_on:
       - shadow
     mem_limit: 128m
