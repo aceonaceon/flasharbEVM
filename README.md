@@ -18,19 +18,35 @@
 
 ## 在 Hetzner 上部署
 
+映像檔由 GitHub Actions 編好推到 GHCR（`ghcr.io/aceonaceon/flasharbevm`），主機只拉下來跑，不在主機上編 Rust。
+
 ```bash
-git clone <repo 網址> /opt/flasharb
+git clone https://github.com/aceonaceon/flasharbEVM /opt/flasharb
 cd /opt/flasharb
-docker compose up -d --build      # 第一次編譯約 5–10 分鐘
-docker compose logs -f            # 看進度
+cp .env.example .env               # 填入 TUNNEL_TOKEN（見下面）
+docker compose pull && docker compose up -d
+docker compose logs -f shadow      # 看進度
 ```
 
 - 資料存在 `/opt/flasharb/data/`：`ledger.sqlite` 是帳本，`report.md` 每小時更新一次。
 - 第一次啟動會往回補抓 6 小時（`backfill_hours`），所以當天就有數據。
 - 重新啟動會從上次停下的區塊接著跑，不會重複記錄。
-- 容器限制 512MB 記憶體、1 顆 CPU，不會影響同一台主機上的其他網站。
+- 容器限制 384MB 記憶體、1 顆 CPU，不會影響同一台主機上的其他網站。
+- 如果 `docker compose pull` 顯示沒有權限，到 GitHub 的 Packages 把 `flasharbevm` 設成 Public（repo 本身是公開的，映像檔裡沒有任何秘密）。
 
-隨時看報表：
+## 狀態網頁
+
+側錄器內建一個只讀網頁（port 8088，只在 compose 內部網路開放），對外由 Cloudflare Tunnel 轉進來，主機不開任何 port：
+
+1. Cloudflare Zero Trust → Networks → Tunnels → 建立一個 tunnel，複製 token 寫進 `.env` 的 `TUNNEL_TOKEN`。
+2. 在這個 tunnel 加一個 Public Hostname，例如 `arb.你的網域`，Service 填 `http://shadow:8088`。
+3. Zero Trust → Access → Applications 新增這個子網域，Policy 只放行你自己的 email。
+
+畫面內容：判決燈號與距離第 14 天的倒數、三個指標的數值與每日趨勢、側錄健康狀態（處理到哪個區塊、落後多久、RPC 錯誤數）、機會怎麼結束的比例、最近 20 筆機會（連到 Arbiscan）、對手排行與對手平均 α。
+
+只想在本機看帳本、不跑側錄時：`flasharb-shadow serve`。
+
+隨時看文字報表：
 
 ```bash
 docker compose run --rm shadow report        # 印在畫面上
@@ -69,7 +85,7 @@ FLASHARB_RPC_URL=https://arb-mainnet.g.alchemy.com/v2/你的key
 ## 開發
 
 ```bash
-cargo test          # 25 個單元測試，不需要網路
+cargo test          # 27 個單元測試，不需要網路
 cargo run -- run    # 本機直接跑
 ```
 
@@ -83,3 +99,4 @@ cargo run -- run    # 本機直接跑
 | `src/ledger.rs` | SQLite 帳本 |
 | `src/report.rs` | 報表與通過門檻 |
 | `src/rpc.rs` | 速率限制、重試、自動調整 getLogs 範圍 |
+| `src/dashboard.rs`、`src/web.rs`、`web/index.html` | 狀態網頁（只讀） |

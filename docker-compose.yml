@@ -1,8 +1,8 @@
-# 只跑側錄器：不需要任何私鑰或錢包。
+# 側錄器 + 狀態網頁。不需要任何私鑰或錢包。
+# 映像檔由 GitHub Actions 編好放在 GHCR，主機只負責拉下來跑（不在主機上編譯 Rust）。
 services:
   shadow:
-    build: .
-    image: flasharb-shadow:latest
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
     container_name: flasharb-shadow
     restart: unless-stopped
     environment:
@@ -12,10 +12,27 @@ services:
     volumes:
       - ./data:/app/data
       - ./config.toml:/app/config.toml:ro
-    mem_limit: 512m
+    # 網頁只在 compose 內部網路開放（port 8088），不對外開 port。
+    expose:
+      - "8088"
+    mem_limit: 384m
     cpus: 1.0
     logging:
       driver: json-file
       options:
         max-size: "20m"
         max-file: "3"
+
+  # Cloudflare Tunnel：把子網域轉到 http://shadow:8088。
+  # 在 Cloudflare Zero Trust 建好 tunnel 後，把 token 寫進 .env 的 TUNNEL_TOKEN。
+  # 登入保護用 Cloudflare Access（只放行你的 email），在 Cloudflare 後台設定。
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: flasharb-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:?在 .env 設定 TUNNEL_TOKEN}
+    depends_on:
+      - shadow
+    mem_limit: 128m

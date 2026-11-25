@@ -293,7 +293,7 @@ mod tests {
         let l = Ledger::in_memory().unwrap();
         l.add_coverage(1, 345_600, 0, 86_400 * 2, true, 0).unwrap(); // 48h
         for i in 0..100u64 {
-            l.insert_opportunity(&opp(1.0, CloseKind::Arb, i, i + 1), 0).unwrap();
+            l.insert_opportunity(&opp(1.0, CloseKind::Arb, i, i + 1), 0, (i * 1000) as i64).unwrap();
         }
         let s = collect(&l.conn, &cfg).unwrap();
         assert!((s.hours - 48.0).abs() < 1e-9);

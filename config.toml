@@ -106,3 +106,8 @@ name = "aero_v2_volatile"
 kind = "aero_v2"
 address = "0x8E6a9FCd1d638CC760Ffba397605Fe3355dE76D2"
 fee_bps = 30
+
+[web]
+# 狀態網頁。Docker 裡只在內部網路開放，對外由 Cloudflare Tunnel 轉進來，不開任何 port。
+enabled = true
+bind = "0.0.0.0:8088"

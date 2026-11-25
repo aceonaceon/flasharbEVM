@@ -14,6 +14,9 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 use tracing::{debug, warn};
 
+/// RPC calls that failed (before retry). Shown on the dashboard.
+pub static RPC_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub const MULTICALL3: Address = address!("cA11bde05977b3631167028862bE2a173976CA11");
 const MULTICALL_CHUNK: usize = 150;
 
@@ -85,6 +88,7 @@ impl Rpc {
                     if is_range_error(&msg) {
                         return Err(e);
                     }
+                    RPC_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     debug!(what, attempt, error = %msg, "rpc retry");
                     last = Some(e);
                     sleep(delay).await;

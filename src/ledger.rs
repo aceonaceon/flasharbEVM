@@ -62,6 +62,28 @@ CREATE TABLE IF NOT EXISTS closer_txs (
 );
 "#;
 
+/// Columns added after the first release. Each step is idempotent.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has_open_ts: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('opportunities') WHERE name='open_ts'")?
+        .exists([])?;
+    if !has_open_ts {
+        conn.execute_batch(
+            "ALTER TABLE opportunities ADD COLUMN open_ts INTEGER NOT NULL DEFAULT 0;
+             UPDATE opportunities SET open_ts = recorded_at WHERE open_ts = 0;",
+        )?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS opp_open_ts ON opportunities(open_ts);")?;
+    Ok(())
+}
+
+/// Open a second, read-only connection for the dashboard.
+pub fn open_read_only(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    Ok(conn)
+}
+
 fn s<T: std::fmt::Display>(v: T) -> String {
     v.to_string()
 }
@@ -77,6 +99,7 @@ impl Ledger {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -84,6 +107,7 @@ impl Ledger {
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -176,12 +200,12 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn insert_opportunity(&self, o: &Opportunity, now: i64) -> Result<i64> {
+    pub fn insert_opportunity(&self, o: &Opportunity, now: i64, open_ts: i64) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO opportunities(pool_a,pool_b,venue_a,venue_b,token0,token1,major,open_block,open_tx,
                gross_usd,peak_usd,gap_pct,suspect,min_depth_usd,close_block,close_tx,close_kind,closer_sender,
-               delay_blocks,same_block,recorded_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+               delay_blocks,same_block,recorded_at,open_ts)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
             params![
                 s(o.pool_a),
                 s(o.pool_b),
@@ -203,7 +227,8 @@ impl Ledger {
                 o.closer_sender.map(s),
                 o.delay_blocks() as i64,
                 o.same_block() as i64,
-                now
+                now,
+                open_ts
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -280,7 +305,7 @@ mod tests {
             close_kind: CloseKind::Arb,
             closer_sender: None,
         };
-        let id = l.insert_opportunity(&o, 0).unwrap();
+        let id = l.insert_opportunity(&o, 0, 0).unwrap();
         assert!(id > 0);
         l.bump_unknown_factory(Address::repeat_byte(5), 3).unwrap();
         l.bump_unknown_factory(Address::repeat_byte(5), 4).unwrap();

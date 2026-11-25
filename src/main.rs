@@ -3,6 +3,7 @@
 
 mod amm;
 mod config;
+mod dashboard;
 mod detector;
 mod events;
 mod ledger;
@@ -10,6 +11,7 @@ mod pools;
 mod price;
 mod report;
 mod rpc;
+mod web;
 
 use alloy::primitives::{Address, B256};
 use anyhow::Result;
@@ -37,11 +39,33 @@ struct Cli {
 enum Cmd {
     /// Follow the chain and record opportunities (default).
     Run,
+    /// Serve only the dashboard over an existing ledger (no chain access).
+    Serve,
     /// Print the markdown report from the ledger.
     Report {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+}
+
+/// A block range with the timestamps of its ends, used to date opportunities.
+#[derive(Debug, Clone, Copy)]
+struct BlockSpan {
+    from: u64,
+    to: u64,
+    from_ts: u64,
+    to_ts: u64,
+}
+
+impl BlockSpan {
+    /// Linear interpolation between the two end timestamps (Arbitrum block times are near-constant).
+    fn ts_of(&self, block: u64) -> u64 {
+        if self.to <= self.from || self.to_ts <= self.from_ts {
+            return self.to_ts;
+        }
+        let b = block.clamp(self.from, self.to) - self.from;
+        self.from_ts + (self.to_ts - self.from_ts) * b / (self.to - self.from)
+    }
 }
 
 /// Classify pools in batches of this size.
@@ -51,6 +75,22 @@ const ENRICH_PER_LOOP: usize = 3;
 
 fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlockSpan;
+
+    #[test]
+    fn block_span_interpolates() {
+        let s = BlockSpan { from: 100, to: 200, from_ts: 1_000, to_ts: 1_025 };
+        assert_eq!(s.ts_of(100), 1_000);
+        assert_eq!(s.ts_of(200), 1_025);
+        assert_eq!(s.ts_of(140), 1_010);
+        assert_eq!(s.ts_of(50), 1_000);
+        let one = BlockSpan { from: 5, to: 5, from_ts: 9, to_ts: 10 };
+        assert_eq!(one.ts_of(5), 10);
+    }
 }
 
 #[tokio::main]
@@ -69,6 +109,11 @@ async fn main() -> Result<()> {
                 None => println!("{md}"),
             }
             Ok(())
+        }
+        Cmd::Serve => {
+            Ledger::open(cfg.run.db_path.as_ref())?;
+            let (bind, db) = (cfg.web.bind.clone(), PathBuf::from(&cfg.run.db_path));
+            web::serve(&bind, db, cfg).await
         }
         Cmd::Run => run(cfg).await,
     }
@@ -104,6 +149,14 @@ async fn run(cfg: Config) -> Result<()> {
         }
     }
     let enrich_done = ledger.closer_tx_count()?;
+    if cfg.web.enabled {
+        let (bind, db, c) = (cfg.web.bind.clone(), PathBuf::from(&cfg.run.db_path), cfg.clone());
+        tokio::spawn(async move {
+            if let Err(e) = web::serve(&bind, db, c).await {
+                warn!(error = %e, "dashboard stopped");
+            }
+        });
+    }
     info!(pools = classified.len(), "loaded pool registry");
     let mut r = Runner {
         cfg,
@@ -158,8 +211,18 @@ impl Runner {
                 tokio::time::sleep(poll).await;
                 continue;
             }
+            web::CHAIN_HEAD.store(latest, std::sync::atomic::Ordering::Relaxed);
             let to = latest.min(next + self.cfg.rpc.max_log_range - 1);
-            let n_events = match self.process(next, to).await {
+            let to_ts = match self.rpc.block_timestamp(to).await {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "block timestamp failed, retrying");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            let span = BlockSpan { from: next, to, from_ts: prev_ts, to_ts };
+            let n_events = match self.process(span).await {
                 Ok(n) => n,
                 Err(e) => {
                     warn!(error = %e, from = next, to, "batch failed, retrying");
@@ -167,10 +230,11 @@ impl Runner {
                     continue;
                 }
             };
-            let to_ts = self.rpc.block_timestamp(to).await?;
             self.ledger.add_coverage(next, to, prev_ts, to_ts, self.det.recording, n_events)?;
             self.ledger.set_last_block(to)?;
             prev_ts = to_ts;
+            web::LAST_TS.store(to_ts, std::sync::atomic::Ordering::Relaxed);
+            web::RECORDING.store(self.det.recording, std::sync::atomic::Ordering::Relaxed);
             if !self.det.recording && to_ts >= warm_until {
                 self.det.recording = true;
                 info!(block = to, "warm-up done, recording");
@@ -205,8 +269,8 @@ impl Runner {
     }
 
     /// Fetch, classify, detect and record one block range. Returns the number of events.
-    async fn process(&mut self, from: u64, to: u64) -> Result<u64> {
-        let logs = self.rpc.pool_logs(from, to).await?;
+    async fn process(&mut self, span: BlockSpan) -> Result<u64> {
+        let logs = self.rpc.pool_logs(span.from, span.to).await?;
         let mut evs: Vec<_> = logs.iter().filter_map(events::decode).collect();
         evs.sort_by_key(|e| (e.block, e.tx_index, e.log_index));
 
@@ -244,7 +308,7 @@ impl Runner {
         let now = now_secs();
         let tx = self.ledger.conn.unchecked_transaction()?;
         for o in &finished {
-            let id = self.ledger.insert_opportunity(o, now)?;
+            let id = self.ledger.insert_opportunity(o, now, span.ts_of(o.open_block) as i64)?;
             let wanted = self.enrich_done + self.enrich_queue.len() as u64;
             if o.close_kind == CloseKind::Arb && !o.suspect && wanted < self.cfg.detect.max_closer_tx_lookups {
                 if let Some(h) = o.close_tx {

@@ -11,6 +11,30 @@ pub struct Config {
     pub gate: GateCfg,
     pub tokens: TokensCfg,
     pub factories: Vec<FactoryCfg>,
+    #[serde(default)]
+    pub web: WebCfg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebCfg {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_bind")]
+    pub bind: String,
+}
+
+impl Default for WebCfg {
+    fn default() -> Self {
+        Self { enabled: true, bind: default_bind() }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_bind() -> String {
+    "0.0.0.0:8088".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
