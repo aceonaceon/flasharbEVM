@@ -138,6 +138,14 @@ async fn run(cfg: Config) -> Result<()> {
     let ledger = Ledger::open(cfg.run.db_path.as_ref())?;
     let oracle = Oracle::new(cfg.tokens.weth, cfg.tokens.stables.clone());
     let mut det = Detector::new(cfg.detect.clone(), oracle, cfg.tokens.majors.clone());
+    let want = pools::CLASSIFIER_VERSION.to_string();
+    if ledger.meta("classifier_version")?.as_deref() != Some(want.as_str()) {
+        if ledger.last_block()?.is_some() {
+            warn!(version = %want, "pool classification rules changed: rebuilding the ledger from scratch");
+        }
+        ledger.reset()?;
+        ledger.set_meta("classifier_version", &want)?;
+    }
     let mut classified = HashSet::new();
     let mut rejected_factory = HashMap::new();
     for row in ledger.load_pools()? {

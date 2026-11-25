@@ -13,6 +13,21 @@ pub struct Config {
     pub factories: Vec<FactoryCfg>,
     #[serde(default)]
     pub web: WebCfg,
+    #[serde(default)]
+    pub discovery: DiscoveryCfg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiscoveryCfg {
+    /// Accept pools from factories not listed in config when their type is unambiguous.
+    #[serde(default = "default_true")]
+    pub auto_accept_unknown_factories: bool,
+}
+
+impl Default for DiscoveryCfg {
+    fn default() -> Self {
+        Self { auto_accept_unknown_factories: true }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

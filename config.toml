@@ -59,6 +59,11 @@ majors = [
   "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f", # WBTC
 ]
 
+[discovery]
+# 沒列在下面的 factory，只要池子型態判斷得出來（v2 / v3 / Algebra），而且 factory 反查得回來，也一併納入，
+# 名稱會顯示成 other_v2_xxxx 這類。v2 分叉的費率一律假設 0.3%。
+auto_accept_unknown_factories = true
+
 # 已知的 DEX factory。池子必須能被它的 factory 反查回來才採用，
 # 否則任何人都能部署一個假合約、發假的 Swap 事件。
 # 報表會列出「沒被認得的 factory」排行，看到大的就補進來。

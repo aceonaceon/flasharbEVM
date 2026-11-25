@@ -111,6 +111,27 @@ impl Ledger {
         Ok(Self { conn })
     }
 
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM meta WHERE key=?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Drop everything derived from pool classification so the next run rebuilds it.
+    pub fn reset(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "DELETE FROM pools; DELETE FROM unknown_factories; DELETE FROM coverage;
+             DELETE FROM opportunities; DELETE FROM closer_txs; DELETE FROM meta;",
+        )?;
+        Ok(())
+    }
+
     pub fn last_block(&self) -> Result<Option<u64>> {
         let v: Option<String> = self
             .conn

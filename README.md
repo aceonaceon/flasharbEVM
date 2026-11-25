@@ -85,7 +85,7 @@ FLASHARB_RPC_URL=https://arb-mainnet.g.alchemy.com/v2/你的key
 ## 開發
 
 ```bash
-cargo test          # 27 個單元測試，不需要網路
+cargo test          # 31 個單元測試，不需要網路
 cargo run -- run    # 本機直接跑
 ```
 
