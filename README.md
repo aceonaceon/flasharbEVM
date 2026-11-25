@@ -28,7 +28,7 @@ docker compose pull && docker compose up -d
 docker compose logs -f shadow      # 看進度
 ```
 
-- 資料存在 `/opt/flasharb/data/`：`ledger.sqlite` 是帳本，`report.md` 每小時更新一次。
+- 資料存在 Docker volume `flasharb-data`：`ledger.sqlite` 是帳本，`report.md` 每小時更新一次。要拿到主機上：`docker compose cp shadow:/app/data/report.md .`
 - 第一次啟動會往回補抓 6 小時（`backfill_hours`），所以當天就有數據。
 - 重新啟動會從上次停下的區塊接著跑，不會重複記錄。
 - 容器限制 384MB 記憶體、1 顆 CPU，不會影響同一台主機上的其他網站。
@@ -50,7 +50,7 @@ docker compose logs -f shadow      # 看進度
 
 ```bash
 docker compose run --rm shadow report        # 印在畫面上
-cat data/report.md                           # 或看最近一次自動產生的
+docker compose cp shadow:/app/data/report.md . # 或複製最近一次自動產生的
 ```
 
 ## 換成更快的 RPC（選用）

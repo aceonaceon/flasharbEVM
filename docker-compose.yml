@@ -10,7 +10,8 @@ services:
       - FLASHARB_RPC_URL=${FLASHARB_RPC_URL:-}
       - RUST_LOG=info
     volumes:
-      - ./data:/app/data
+      # named volume：第一次建立時沿用映像檔裡 /app/data 的擁有者（非 root 使用者），不會有權限問題
+      - flasharb-data:/app/data
       - ./config.toml:/app/config.toml:ro
     # 網頁只在 compose 內部網路開放（port 8088），不對外開 port。
     expose:
@@ -38,3 +39,6 @@ services:
     depends_on:
       - shadow
     mem_limit: 128m
+
+volumes:
+  flasharb-data:
