@@ -3,6 +3,7 @@ FROM rust:1.91-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY web ./web
 COPY config.toml ./
 RUN cargo build --release --locked && strip target/release/flasharb-shadow
 
