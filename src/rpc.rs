@@ -17,6 +17,8 @@ use tracing::{debug, warn};
 /// RPC calls that failed (before retry). Shown on the dashboard.
 pub static RPC_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+const MAX_GAP: Duration = Duration::from_secs(2);
+
 pub const MULTICALL3: Address = address!("cA11bde05977b3631167028862bE2a173976CA11");
 const MULTICALL_CHUNK: usize = 150;
 
@@ -29,14 +31,27 @@ sol! {
 pub struct Rpc {
     provider: DynProvider,
     min_gap: Duration,
+    /// Current spacing between calls: grows on 429, shrinks back on success (like TCP AIMD).
+    gap: Mutex<Duration>,
     timeout: Duration,
     next_slot: Mutex<Instant>,
     log_range: Mutex<u64>,
     max_log_range: u64,
 }
 
+/// The provider is asking us to slow down (HTTP 429 or a JSON-RPC rate-limit error).
+/// Checked before `is_range_error`, because "Too Many Requests" would otherwise
+/// look like "too many results" and skip the retry.
+fn is_rate_limited(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    ["429", "too many requests", "rate limit", "rate-limit", "ratelimit", "-32005"].iter().any(|k| m.contains(k))
+}
+
 /// Errors that mean "ask for fewer blocks", as phrased by common RPC providers.
 fn is_range_error(msg: &str) -> bool {
+    if is_rate_limited(msg) {
+        return false;
+    }
     let m = msg.to_ascii_lowercase();
     ["range", "too many", "limit", "exceed", "10000", "response size", "query returned more"]
         .iter()
@@ -51,6 +66,7 @@ impl Rpc {
             provider,
             timeout: Duration::from_secs(cfg.timeout_sec.max(1)),
             min_gap: Duration::from_secs_f64(1.0 / cfg.max_rps.max(1) as f64),
+            gap: Mutex::new(Duration::from_secs_f64(1.0 / cfg.max_rps.max(1) as f64)),
             next_slot: Mutex::new(Instant::now()),
             log_range: Mutex::new(cfg.initial_log_range.max(1)),
             max_log_range: cfg.max_log_range.max(1),
@@ -62,10 +78,30 @@ impl Rpc {
             let mut slot = self.next_slot.lock().await;
             let now = Instant::now();
             let start = (*slot).max(now);
-            *slot = start + self.min_gap;
+            *slot = start + *self.gap.lock().await;
             start
         };
         tokio::time::sleep_until(wait_until).await;
+    }
+
+    /// Rate limited: double the spacing and pause every caller for `pause`.
+    async fn slow_down(&self, pause: Duration) {
+        let gap = {
+            let mut g = self.gap.lock().await;
+            *g = (*g * 2).min(MAX_GAP);
+            *g
+        };
+        let mut slot = self.next_slot.lock().await;
+        *slot = (*slot).max(Instant::now() + pause);
+        warn!(gap_ms = gap.as_millis() as u64, pause_s = pause.as_secs(), "rpc rate limited, slowing down");
+    }
+
+    /// Success: creep back toward the configured rate.
+    async fn speed_up(&self) {
+        let mut g = self.gap.lock().await;
+        if *g > self.min_gap {
+            *g = (g.mul_f64(0.97)).max(self.min_gap);
+        }
     }
 
     async fn retry<T, F, Fut>(&self, what: &str, mut f: F) -> Result<T>
@@ -75,24 +111,31 @@ impl Rpc {
     {
         let mut delay = Duration::from_millis(500);
         let mut last = None;
-        for attempt in 0..6 {
+        for attempt in 0..10 {
             self.throttle().await;
             let res = match tokio::time::timeout(self.timeout, f()).await {
                 Ok(r) => r,
                 Err(_) => Err(anyhow!("{what}: timed out")),
             };
             match res {
-                Ok(v) => return Ok(v),
+                Ok(v) => {
+                    self.speed_up().await;
+                    return Ok(v);
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     if is_range_error(&msg) {
                         return Err(e);
                     }
+                    if is_rate_limited(&msg) {
+                        delay = delay.max(Duration::from_secs(2));
+                        self.slow_down(delay).await;
+                    }
                     RPC_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     debug!(what, attempt, error = %msg, "rpc retry");
                     last = Some(e);
                     sleep(delay).await;
-                    delay = (delay * 2).min(Duration::from_secs(30));
+                    delay = (delay * 2).min(Duration::from_secs(60));
                 }
             }
         }
@@ -210,5 +253,14 @@ mod tests {
         assert!(is_range_error("block range too large"));
         assert!(is_range_error("Log response size exceeded"));
         assert!(!is_range_error("connection reset by peer"));
+    }
+
+    #[test]
+    fn rate_limits_are_not_range_errors() {
+        let m = r#"HTTP error 429 with body: {"jsonrpc":"2.0","error":{"code":429,"message":"Too Many Requests"}}"#;
+        assert!(is_rate_limited(m));
+        assert!(!is_range_error(m));
+        assert!(is_rate_limited("daily request rate limit exceeded"));
+        assert!(!is_rate_limited("block range too large"));
     }
 }

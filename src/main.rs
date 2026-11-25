@@ -212,7 +212,16 @@ impl Runner {
         loop {
             let latest = tokio::select! {
                 _ = &mut stop => { info!("shutting down"); return Ok(()); }
-                b = self.rpc.block_number() => b?,
+                b = self.rpc.block_number() => match b {
+                    Ok(b) => b,
+                    Err(e) => {
+                        // Never let a transient RPC failure end the process: a restart
+                        // forgets every open opportunity and re-warms for 10 minutes.
+                        warn!(error = %e, "blockNumber failed, retrying");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        continue;
+                    }
+                },
             };
             if next > latest {
                 self.enrich().await;
