@@ -1,0 +1,21 @@
+# 只跑側錄器：不需要任何私鑰或錢包。
+services:
+  shadow:
+    build: .
+    image: flasharb-shadow:latest
+    container_name: flasharb-shadow
+    restart: unless-stopped
+    environment:
+      # 想換成 Alchemy 免費方案等更快的 RPC，就在 .env 裡設定 FLASHARB_RPC_URL
+      - FLASHARB_RPC_URL=${FLASHARB_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - ./data:/app/data
+      - ./config.toml:/app/config.toml:ro
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
