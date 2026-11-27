@@ -47,6 +47,13 @@ fn is_rate_limited(msg: &str) -> bool {
     ["429", "too many requests", "rate limit", "rate-limit", "ratelimit", "-32005"].iter().any(|k| m.contains(k))
 }
 
+/// Errors that retrying cannot fix: the node refuses old data without a paid
+/// token, or its answer does not decode. Fail fast instead of backing off for minutes.
+fn is_permanent(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    ["archive", "personal token", "deserialization error", "unknown variant"].iter().any(|k| m.contains(k))
+}
+
 /// Errors that mean "ask for fewer blocks", as phrased by common RPC providers.
 fn is_range_error(msg: &str) -> bool {
     if is_rate_limited(msg) {
@@ -124,7 +131,8 @@ impl Rpc {
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    if is_range_error(&msg) {
+                    if is_range_error(&msg) || is_permanent(&msg) {
+                        RPC_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         return Err(e);
                     }
                     if is_rate_limited(&msg) {
@@ -160,9 +168,27 @@ impl Rpc {
         Ok(self.block(n).await?.header.timestamp)
     }
 
-    /// Find the first block at or after `ts` (binary search on timestamps).
+    /// Find the first block at or after `ts`. Only touches recent blocks: block 1 is
+    /// often pruned or behind an archive paywall on free RPCs (and missing on Optimism).
     pub async fn block_at_or_after(&self, ts: u64, latest: u64) -> Result<u64> {
-        let (mut lo, mut hi) = (1u64, latest);
+        let head_ts = self.block_timestamp(latest).await?;
+        if ts >= head_ts {
+            return Ok(latest);
+        }
+        let k = latest.min(1_000).max(1);
+        let back_ts = self.block_timestamp(latest - k).await?;
+        let block_time = ((head_ts.saturating_sub(back_ts)) as f64 / k as f64).max(0.05);
+        // Overshoot the estimate, then widen until the lower bound is old enough.
+        let mut dist = ((head_ts - ts) as f64 / block_time * 1.2) as u64 + 10;
+        let mut lo;
+        loop {
+            lo = latest.saturating_sub(dist);
+            if lo == 0 || self.block_timestamp(lo).await? < ts {
+                break;
+            }
+            dist *= 2;
+        }
+        let mut hi = latest;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             if self.block_timestamp(mid).await? < ts {
@@ -242,16 +268,52 @@ impl Rpc {
         Ok(receipt.map(|r| (r.from, r)))
     }
 
-    /// Every receipt in one block (one call). Used to count failed attempts.
-    pub async fn block_receipts(&self, n: u64) -> Result<Option<Vec<TransactionReceipt>>> {
-        self.retry("getBlockReceipts", || async { Ok(self.provider.get_block_receipts(n.into()).await?) })
-            .await
+    /// Every receipt in one block, as (succeeded, emitted_logs, gas_used). Read as plain
+    /// JSON because chain-specific tx types (Arbitrum 0x6a, OP-stack 0x7e) do not decode
+    /// into alloy's Ethereum receipt type.
+    pub async fn block_receipts(&self, n: u64) -> Result<Option<Vec<(bool, bool, u64)>>> {
+        let raw: Option<Vec<serde_json::Value>> = self
+            .retry("getBlockReceipts", || async {
+                Ok(self.provider.raw_request("eth_getBlockReceipts".into(), (format!("{n:#x}"),)).await?)
+            })
+            .await?;
+        Ok(raw.map(|v| v.iter().map(receipt_summary).collect()))
     }
+}
+
+fn hex_u64(v: &serde_json::Value) -> Option<u64> {
+    u64::from_str_radix(v.as_str()?.trim_start_matches("0x"), 16).ok()
+}
+
+/// (succeeded, emitted_logs, gas_used) from one JSON receipt. Pre-Byzantium
+/// receipts have no status; count those as succeeded.
+fn receipt_summary(r: &serde_json::Value) -> (bool, bool, u64) {
+    let ok = r.get("status").and_then(hex_u64).map_or(true, |s| s == 1);
+    let logs = r.get("logs").and_then(|l| l.as_array()).is_some_and(|l| !l.is_empty());
+    (ok, logs, r.get("gasUsed").and_then(hex_u64).unwrap_or(0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipts_of_any_tx_type_are_read() {
+        let v: serde_json::Value = serde_json::json!([
+            {"type":"0x6a","status":"0x1","gasUsed":"0x0","logs":[]},
+            {"type":"0x7e","status":"0x0","gasUsed":"0x5208","logs":[]},
+            {"type":"0x2","status":"0x1","gasUsed":"0x10","logs":[{"address":"0x00"}]}
+        ]);
+        let got: Vec<_> = v.as_array().unwrap().iter().map(receipt_summary).collect();
+        assert_eq!(got, vec![(true, false, 0), (false, false, 21_000), (true, true, 16)]);
+    }
+
+    #[test]
+    fn archive_refusals_are_not_retried() {
+        assert!(is_permanent("HTTP error 403 with body: Archive requests require a personal token"));
+        assert!(is_permanent("deserialization error: unknown variant `0x6a`"));
+        assert!(!is_permanent("HTTP error 429"));
+    }
 
     #[test]
     fn range_errors_are_recognised() {

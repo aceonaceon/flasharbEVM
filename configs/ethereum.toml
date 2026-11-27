@@ -16,7 +16,9 @@ timeout_sec = 30
 [run]
 db_path = "data/ledger.sqlite"
 poll_ms = 2000
-backfill_hours = 6
+# publicnode 免費版不給舊區塊的資料（要付費 token），所以不補抓，從現在開始記。
+# 換成 Alchemy 等有歷史資料的 RPC 後，可以改回 6。
+backfill_hours = 0
 warmup_minutes = 10
 
 [detect]

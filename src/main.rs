@@ -200,9 +200,17 @@ impl Runner {
         }
         let now = self.rpc.block_timestamp(latest).await?;
         let ts = now.saturating_sub(self.cfg.run.backfill_hours * 3600);
-        let b = self.rpc.block_at_or_after(ts, latest).await?;
-        info!(from = b, hours = self.cfg.run.backfill_hours, "backfilling");
-        Ok(b)
+        match self.rpc.block_at_or_after(ts, latest).await {
+            Ok(b) => {
+                info!(from = b, hours = self.cfg.run.backfill_hours, "backfilling");
+                Ok(b)
+            }
+            // Free RPCs often refuse old blocks; start live rather than crash-loop.
+            Err(e) => {
+                warn!(error = %e, "backfill start not found, starting from the chain head");
+                Ok(latest)
+            }
+        }
     }
 
     async fn main_loop(&mut self) -> Result<()> {
@@ -397,10 +405,7 @@ impl Runner {
         if !self.ledger.has_block_stats(block)? {
             match self.rpc.block_receipts(block).await {
                 Ok(Some(rcs)) => {
-                    let stats = BlockStats::tally(
-                        block,
-                        rcs.iter().map(|r| (r.status(), !r.inner.logs().is_empty(), r.gas_used)),
-                    );
+                    let stats = BlockStats::tally(block, rcs);
                     self.ledger.insert_block_stats(&stats)?;
                 }
                 Ok(None) => {}
