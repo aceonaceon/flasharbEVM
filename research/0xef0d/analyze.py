@@ -2,6 +2,7 @@ import json, sys, os, collections, statistics as st
 
 D = sys.argv[1]
 C = "0xef0df9a49025512f0d5e3b45dcc27903af984834"
+BEN = "0xd69719a8bda1cc82b2c2fb4ce84493689759cee4"  # hardcoded profit receiver
 def L(n):
     p = os.path.join(D, n)
     return json.load(open(p)) if os.path.exists(p) else None
@@ -102,8 +103,8 @@ for d in det:
         if t0 == TR and len(lg["topics"]) == 3:
             fr = "0x" + lg["topics"][1][26:]; to = "0x" + lg["topics"][2][26:]
             amt = int(lg["data"], 16) if lg["data"] not in ("0x", "") else 0
-            if to == C: net[lg["address"].lower()] += amt
-            if fr == C: net[lg["address"].lower()] -= amt
+            if to in (C, BEN): net[lg["address"].lower()] += amt
+            if fr in (C, BEN): net[lg["address"].lower()] -= amt
         elif t0 and t0 not in TOPICS and t0 != TR and t0 not in FLASH:
             topic_unknown[t0] += 1
     usd, unpriced = 0.0, {}
