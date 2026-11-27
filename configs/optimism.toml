@@ -6,8 +6,9 @@ name = "Optimism"
 explorer = "https://optimistic.etherscan.io"
 
 [rpc]
-url = "https://optimism-rpc.publicnode.com"
-max_rps = 4
+# publicnode 免費版不給「不指定合約地址」的全鏈事件查詢，所以用 dRPC 的免費公開節點
+url = "https://optimism.drpc.org"
+max_rps = 3
 initial_log_range = 50
 max_log_range = 1000
 timeout_sec = 30
@@ -15,7 +16,7 @@ timeout_sec = 30
 [run]
 db_path = "data/ledger.sqlite"
 poll_ms = 2000
-# publicnode 免費版不給舊區塊的資料（要付費 token），所以不補抓，從現在開始記。
+# 免費 RPC 多半不給舊區塊的資料，所以不補抓，從現在開始記。
 # 換成 Alchemy 等有歷史資料的 RPC 後，可以改回 6。
 backfill_hours = 0
 warmup_minutes = 10

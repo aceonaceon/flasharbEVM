@@ -7,8 +7,9 @@ explorer = "https://basescan.org"
 
 [rpc]
 # 免費公開 RPC；可用環境變數 FLASHARB_RPC_URL 覆蓋（.env 裡的 FLASHARB_BASE_RPC_URL）
-url = "https://base-rpc.publicnode.com"
-max_rps = 4
+# publicnode 免費版不給「不指定合約地址」的全鏈事件查詢，所以用 dRPC 的免費公開節點
+url = "https://base.drpc.org"
+max_rps = 3
 initial_log_range = 20
 max_log_range = 500
 timeout_sec = 30
@@ -16,7 +17,7 @@ timeout_sec = 30
 [run]
 db_path = "data/ledger.sqlite"
 poll_ms = 2000
-# publicnode 免費版不給舊區塊的資料（要付費 token），所以不補抓，從現在開始記。
+# 免費 RPC 多半不給舊區塊的資料，所以不補抓，從現在開始記。
 # 換成 Alchemy 等有歷史資料的 RPC 後，可以改回 6。
 backfill_hours = 0
 warmup_minutes = 10
