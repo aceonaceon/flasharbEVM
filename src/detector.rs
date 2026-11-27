@@ -19,7 +19,7 @@ use crate::price::Oracle;
 use alloy::primitives::{Address, B256};
 use std::collections::{HashMap, HashSet};
 
-/// About 10 minutes of Arbitrum blocks.
+/// About 10 minutes of Arbitrum blocks; the default for `detect.stale_blocks`.
 pub const STALE_BLOCKS: u64 = 2_400;
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,8 @@ pub struct PoolInfo {
     pub token1: Address,
     pub fee_ppm: u32,
     pub is_cl: bool,
+    /// CL pools only; 0 when unknown (treated as one tick, the conservative case).
+    pub tick_spacing: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,7 +140,7 @@ impl Detector {
     /// Apply one event. Returns opportunities that finished as a result.
     pub fn on_event(&mut self, ev: &PoolEvent) -> Vec<Opportunity> {
         let mut done = Vec::new();
-        let Some(fee) = self.pools.get(&ev.pool).map(|i| i.fee_ppm) else { return done };
+        let Some((fee, ts)) = self.pools.get(&ev.pool).map(|i| (i.fee_ppm, i.tick_spacing)) else { return done };
         let same_tx = matches!(&self.cur, Some(c) if c.block == ev.block && c.tx_index == ev.tx_index);
         if !same_tx {
             done.extend(self.finish_tx());
@@ -155,7 +157,7 @@ impl Detector {
             });
         }
         let reserves = match ev.update {
-            Update::Cl { sqrt_price_x96, liquidity, .. } => Reserves::from_cl(sqrt_price_x96, liquidity, fee),
+            Update::Cl { sqrt_price_x96, liquidity, .. } => Reserves::from_cl(sqrt_price_x96, liquidity, fee, ts),
             Update::V2 { r0, r1 } => Reserves::from_v2(r0, r1, fee),
         };
         match reserves {
@@ -280,7 +282,7 @@ impl Detector {
         let stale: Vec<_> = self
             .open
             .iter()
-            .filter(|(_, o)| block.saturating_sub(o.opp.open_block) > STALE_BLOCKS)
+            .filter(|(_, o)| block.saturating_sub(o.opp.open_block) > self.cfg.stale_blocks)
             .map(|(k, _)| *k)
             .collect();
         stale
@@ -314,6 +316,8 @@ mod tests {
             suspect_gap_pct: 30.0,
             min_pool_liquidity_usd: 1000.0,
             max_closer_tx_lookups: 10,
+            stale_blocks: STALE_BLOCKS,
+            fail_cost_usd: 0.0,
         }
     }
 
@@ -327,7 +331,7 @@ mod tests {
                 token0: addr(TOK),
                 token1: addr(USDC),
                 fee_ppm: 3000,
-                is_cl: false,
+                is_cl: false, tick_spacing: 0
             });
         }
         d

@@ -24,6 +24,107 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  # 其他鏈：同一個映像檔，各自一份設定檔與帳本。Arbitrum 的網頁可以切換過去看。
+  shadow-bsc:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-bsc
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_BSC_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-bsc-data:/app/data
+      - ./configs/bsc.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-eth:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-eth
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_ETH_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-eth-data:/app/data
+      - ./configs/ethereum.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-base:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-base
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_BASE_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-base-data:/app/data
+      - ./configs/base.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 384m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-op:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-op
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_OP_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-op-data:/app/data
+      - ./configs/optimism.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-polygon:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-polygon
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_POLYGON_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-polygon-data:/app/data
+      - ./configs/polygon.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   # Cloudflare Tunnel：把子網域轉到 http://shadow:8088。
   # 在 Cloudflare Zero Trust 建好 tunnel 後，把 token 寫進 .env 的 TUNNEL_TOKEN。
   # 登入保護用 Cloudflare Access（只放行你的 email），在 Cloudflare 後台設定。
@@ -42,3 +143,8 @@ services:
 
 volumes:
   flasharb-data:
+  flasharb-bsc-data:
+  flasharb-eth-data:
+  flasharb-base-data:
+  flasharb-op-data:
+  flasharb-polygon-data:

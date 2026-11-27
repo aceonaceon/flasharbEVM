@@ -30,14 +30,51 @@ pub struct CloserTx {
     pub total_fee_usd: f64,
 }
 
+/// Activity in one block. A "call" is a tx that emitted logs or reverted
+/// (plain transfers do neither); reverted calls are mostly bots that lost a race.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BlockStats {
+    pub block: u64,
+    pub txs: u64,
+    pub calls: u64,
+    pub reverted: u64,
+    pub gas: u64,
+    pub reverted_gas: u64,
+}
+
+impl BlockStats {
+    /// `txs` yields (succeeded, emitted_logs, gas_used) per transaction.
+    pub fn tally(block: u64, txs: impl IntoIterator<Item = (bool, bool, u64)>) -> Self {
+        let mut b = BlockStats { block, ..Default::default() };
+        for (ok, logs, gas) in txs {
+            b.txs += 1;
+            b.gas += gas;
+            if !ok {
+                b.reverted += 1;
+                b.reverted_gas += gas;
+            }
+            if logs || !ok {
+                b.calls += 1;
+            }
+        }
+        b
+    }
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pools (
   address TEXT PRIMARY KEY, factory TEXT NOT NULL, venue TEXT NOT NULL,
   token0 TEXT NOT NULL, token1 TEXT NOT NULL, fee_ppm INTEGER NOT NULL,
-  is_cl INTEGER NOT NULL, verified INTEGER NOT NULL, note TEXT NOT NULL
+  is_cl INTEGER NOT NULL, verified INTEGER NOT NULL, note TEXT NOT NULL,
+  tick_spacing INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS unknown_factories (factory TEXT PRIMARY KEY, events INTEGER NOT NULL);
+-- How busy the blocks are where a rival arb landed: contract calls vs. ones that reverted.
+CREATE TABLE IF NOT EXISTS block_stats (
+  block INTEGER PRIMARY KEY, txs INTEGER NOT NULL, calls INTEGER NOT NULL,
+  reverted INTEGER NOT NULL, gas INTEGER NOT NULL, reverted_gas INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS coverage (
   from_block INTEGER NOT NULL, to_block INTEGER NOT NULL,
   from_ts INTEGER NOT NULL, to_ts INTEGER NOT NULL,
@@ -72,6 +109,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             "ALTER TABLE opportunities ADD COLUMN open_ts INTEGER NOT NULL DEFAULT 0;
              UPDATE opportunities SET open_ts = recorded_at WHERE open_ts = 0;",
         )?;
+    }
+    let has_ts: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('pools') WHERE name='tick_spacing'")?
+        .exists([])?;
+    if !has_ts {
+        conn.execute_batch("ALTER TABLE pools ADD COLUMN tick_spacing INTEGER NOT NULL DEFAULT 0;")?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS opp_open_ts ON opportunities(open_ts);")?;
     Ok(())
@@ -127,7 +170,7 @@ impl Ledger {
     pub fn reset(&self) -> Result<()> {
         self.conn.execute_batch(
             "DELETE FROM pools; DELETE FROM unknown_factories; DELETE FROM coverage;
-             DELETE FROM opportunities; DELETE FROM closer_txs; DELETE FROM meta;",
+             DELETE FROM opportunities; DELETE FROM closer_txs; DELETE FROM block_stats; DELETE FROM meta;",
         )?;
         Ok(())
     }
@@ -150,8 +193,8 @@ impl Ledger {
 
     pub fn upsert_pool(&self, row: &PoolRow) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO pools(address,factory,venue,token0,token1,fee_ppm,is_cl,verified,note)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT OR REPLACE INTO pools(address,factory,venue,token0,token1,fee_ppm,is_cl,verified,note,tick_spacing)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 s(row.info.address),
                 s(row.factory),
@@ -161,7 +204,8 @@ impl Ledger {
                 row.info.fee_ppm,
                 row.info.is_cl as i64,
                 row.verified as i64,
-                row.note
+                row.note,
+                row.info.tick_spacing
             ],
         )?;
         Ok(())
@@ -169,7 +213,7 @@ impl Ledger {
 
     pub fn load_pools(&self) -> Result<Vec<PoolRow>> {
         let mut st = self.conn.prepare(
-            "SELECT address,factory,venue,token0,token1,fee_ppm,is_cl,verified,note FROM pools",
+            "SELECT address,factory,venue,token0,token1,fee_ppm,is_cl,verified,note,tick_spacing FROM pools",
         )?;
         let rows = st.query_map([], |r| {
             Ok((
@@ -182,11 +226,12 @@ impl Ledger {
                 r.get::<_, i64>(6)?,
                 r.get::<_, i64>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, i32>(9)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (a, f, venue, t0, t1, fee, cl, ver, note) = row?;
+            let (a, f, venue, t0, t1, fee, cl, ver, note, ts) = row?;
             out.push(PoolRow {
                 info: PoolInfo {
                     address: a.parse()?,
@@ -195,6 +240,7 @@ impl Ledger {
                     token1: t1.parse()?,
                     fee_ppm: fee,
                     is_cl: cl != 0,
+                    tick_spacing: ts,
                 },
                 factory: f.parse()?,
                 verified: ver != 0,
@@ -259,6 +305,18 @@ impl Ledger {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM closer_txs", [], |r| r.get::<_, i64>(0))? as u64)
     }
 
+    pub fn has_block_stats(&self, block: u64) -> Result<bool> {
+        Ok(self.conn.prepare("SELECT 1 FROM block_stats WHERE block=?1")?.exists([block as i64])?)
+    }
+
+    pub fn insert_block_stats(&self, b: &BlockStats) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO block_stats(block,txs,calls,reverted,gas,reverted_gas) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![b.block as i64, b.txs as i64, b.calls as i64, b.reverted as i64, b.gas as i64, b.reverted_gas as i64],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_closer_tx(&self, c: &CloserTx) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO closer_txs(tx,opp_id,from_addr,gas_used,effective_gas_price,base_fee,priority_usd,total_fee_usd)
@@ -281,6 +339,12 @@ impl Ledger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_stats_count_reverted_calls() {
+        let b = BlockStats::tally(7, [(true, true, 100), (false, false, 50), (true, false, 21_000), (false, false, 30)]);
+        assert_eq!(b, BlockStats { block: 7, txs: 4, calls: 3, reverted: 2, gas: 21_180, reverted_gas: 80 });
+    }
     use crate::detector::CloseKind;
 
     #[test]
@@ -297,7 +361,7 @@ mod tests {
             token0: Address::repeat_byte(1),
             token1: Address::repeat_byte(2),
             fee_ppm: 500,
-            is_cl: true,
+            is_cl: true, tick_spacing: 0
         };
         l.upsert_pool(&PoolRow { info: info.clone(), factory: Address::repeat_byte(7), verified: true, note: String::new() })
             .unwrap();

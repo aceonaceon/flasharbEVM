@@ -241,6 +241,12 @@ impl Rpc {
             .await?;
         Ok(receipt.map(|r| (r.from, r)))
     }
+
+    /// Every receipt in one block (one call). Used to count failed attempts.
+    pub async fn block_receipts(&self, n: u64) -> Result<Option<Vec<TransactionReceipt>>> {
+        self.retry("getBlockReceipts", || async { Ok(self.provider.get_block_receipts(n.into()).await?) })
+            .await
+    }
 }
 
 #[cfg(test)]

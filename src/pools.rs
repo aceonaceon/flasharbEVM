@@ -17,9 +17,10 @@ use alloy::sol;
 use alloy::sol_types::SolCall;
 use anyhow::Result;
 
-/// Bump when classification rules change; the ledger is then rebuilt from scratch
-/// so that old, mis-classified pools and the opportunities they produced go away.
-pub const CLASSIFIER_VERSION: u32 = 2;
+/// Bump when classification or detection rules change; the ledger is then rebuilt
+/// from scratch (the old one is kept as ledger.v<N>.sqlite) so numbers never mix.
+/// v3: CL pools record tick spacing and trades are capped at the current bucket.
+pub const CLASSIFIER_VERSION: u32 = 3;
 
 sol! {
     function token0() external view returns (address);
@@ -251,20 +252,21 @@ pub async fn resolve(rpc: &Rpc, cfg: &Config, pools: &[Address]) -> Result<Vec<P
         match classify(s.pool, s.t0, s.t1, s.factory, configured, &probe) {
             Decision::Accept { kind, venue, fee_ppm, verify, note } => {
                 calls.push((s.factory, verify));
-                pending.push((i, kind, venue, fee_ppm, note));
+                let ts = probe.tick_spacing().map(|t| t.as_i32()).unwrap_or(0);
+                pending.push((i, kind, venue, fee_ppm, note, ts));
             }
             Decision::Reject(note) => rows.push(unverified(s.pool, s.factory, note)),
         }
     }
     let r3 = rpc.multicall(calls).await?;
 
-    for ((i, kind, venue, fee, note), res) in pending.into_iter().zip(r3) {
+    for ((i, kind, venue, fee, note, ts), res) in pending.into_iter().zip(r3) {
         let s = &cands[i];
         let ok = match kind {
             FactoryKind::AeroV2 => bool_word(&res) == Some(true),
             _ => dec_addr(&res) == Some(s.pool),
         };
-        let info = PoolInfo { address: s.pool, venue, token0: s.t0, token1: s.t1, fee_ppm: fee, is_cl: kind.is_cl() };
+        let info = PoolInfo { address: s.pool, venue, token0: s.t0, token1: s.t1, fee_ppm: fee, is_cl: kind.is_cl(), tick_spacing: if kind.is_cl() { ts } else { 0 } };
         rows.push(PoolRow {
             info,
             factory: s.factory,
@@ -283,7 +285,7 @@ fn unverified(pool: Address, factory: Address, note: &str) -> PoolRow {
             token0: Address::ZERO,
             token1: Address::ZERO,
             fee_ppm: 0,
-            is_cl: false,
+            is_cl: false, tick_spacing: 0
         },
         factory,
         verified: false,

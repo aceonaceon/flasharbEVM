@@ -1909,6 +1909,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

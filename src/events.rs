@@ -10,7 +10,11 @@ pub const SYNC_V2: B256 = b256!("1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50
 /// Sync(uint256,uint256): Velodrome-style v2 pools (Aero v2).
 pub const SYNC_U256: B256 = b256!("cf2aa50876cdfbb541206f89af0ee78d44a2abf8d328e37fa4917f982149848a");
 
-pub const TOPICS: [B256; 3] = [SWAP_V3, SYNC_V2, SYNC_U256];
+/// Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128): PancakeSwap v3
+/// (two extra protocol-fee fields at the end; the fields we read sit at the same offsets).
+pub const SWAP_PANCAKE_V3: B256 = b256!("19b47279256b2a23a1665c810c8d55a1758940ee09377d4f8d26497a3577dc83");
+
+pub const TOPICS: [B256; 4] = [SWAP_V3, SWAP_PANCAKE_V3, SYNC_V2, SYNC_U256];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Update {
@@ -48,7 +52,7 @@ pub fn decode(log: &Log) -> Option<PoolEvent> {
     let topics = log.topics();
     let t0 = *topics.first()?;
     let data = log.data().data.as_ref();
-    let update = if t0 == SWAP_V3 {
+    let update = if t0 == SWAP_V3 || t0 == SWAP_PANCAKE_V3 {
         if topics.len() < 3 || data.len() < 5 * 32 {
             return None;
         }
@@ -84,6 +88,10 @@ mod tests {
     #[test]
     fn topic_constants_match_signatures() {
         assert_eq!(keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)"), SWAP_V3);
+        assert_eq!(
+            keccak256("Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)"),
+            SWAP_PANCAKE_V3
+        );
         assert_eq!(keccak256("Sync(uint112,uint112)"), SYNC_V2);
         assert_eq!(keccak256("Sync(uint256,uint256)"), SYNC_U256);
     }

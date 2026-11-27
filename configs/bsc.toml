@@ -1,0 +1,76 @@
+# FlashArb 側錄器：BSC（只記錄、不送單）
+# 送單可走私有打包者，失敗通常不付 gas（上合約前要再確認）；長尾迷因幣量大。
+
+[chain]
+name = "BSC"
+explorer = "https://bscscan.com"
+
+[rpc]
+# 免費公開 RPC；可用環境變數 FLASHARB_RPC_URL 覆蓋
+url = "https://bsc-rpc.publicnode.com"
+max_rps = 5
+initial_log_range = 50
+max_log_range = 1000
+timeout_sec = 30
+
+[run]
+db_path = "data/ledger.sqlite"
+poll_ms = 2000
+backfill_hours = 6
+warmup_minutes = 10
+
+[detect]
+# 約 0.75 秒一個區塊：800 個區塊約 10 分鐘
+stale_blocks = 800
+min_gross_usd = 0.10
+# 兩腳 swap 約 25 萬 gas，BSC gas 很便宜
+gas_cost_usd = 0.02
+suspect_gap_pct = 30.0
+min_pool_liquidity_usd = 2000.0
+max_closer_tx_lookups = 400
+
+[gate]
+# 只有「扣完 gas 每天能撿多少」決定結論；另外兩項只當參考
+min_addressable_usd_per_day = 1.0
+min_median_gross_usd = 0.30
+max_same_block_share = 0.5
+
+[tokens]
+weth = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # WBNB（計價用的原生幣）
+stables = []
+# BSC 上的 USDT / USDC 是 18 位小數
+stables18 = [
+  "0x55d398326f99059ff775485246999027b3197955", # USDT
+  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", # USDC
+]
+majors = [
+  "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", # WBNB
+  "0x55d398326f99059ff775485246999027b3197955", # USDT
+  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", # USDC
+  "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c", # BTCB
+  "0x2170ed0880ac9a755fd29b2688956bd959f933f8", # ETH
+]
+
+[discovery]
+auto_accept_unknown_factories = true
+
+# kind: univ3 | algebra | aero_cl | univ2 | aero_v2（PancakeSwap v3 與 Uniswap v3 同為 univ3）
+[[factories]]
+name = "pancake_v3"
+kind = "univ3"
+address = "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865"
+
+[[factories]]
+name = "uniswap_v3"
+kind = "univ3"
+address = "0xdb1d10011ad0ff90774d0c6bb92e5c5c8b4461f7"
+
+[[factories]]
+name = "pancake_v2"
+kind = "univ2"
+address = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73"
+fee_bps = 25
+
+[web]
+enabled = true
+bind = "0.0.0.0:8088"

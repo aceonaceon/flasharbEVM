@@ -1,20 +1,21 @@
 # FlashArb 側錄器（shadow mode）
 
-這個程式在 Arbitrum 上**只記錄、不交易**：它跟著鏈上每一筆 DEX 交易，找出「兩個池子之間出現的套利空間」，再記下最後是誰、在第幾個區塊、出多少手續費把它吃掉的。
+這個程式在 Arbitrum、BSC、Ethereum、Base、Optimism、Polygon 上**只記錄、不交易**：它跟著鏈上每一筆 DEX 交易，找出「兩個池子之間出現的套利空間」，再記下最後是誰、在第幾個區塊、出多少手續費把它吃掉的。
 
-它沒有私鑰，也不會送出任何交易。跑 14 天後，報表會告訴你這個套利計畫值不值得往下做。
+它沒有私鑰，也不會送出任何交易。觀察 30 天（要等到市場波動大的日子），報表會告訴你每條鏈值不值得往下做。
 
 ## 它在回答什麼問題
 
-計畫第 14 天要看的三個指標，都直接從帳本算出來：
+打法是「平時等待、出事撿漏」。主機是共用的，不算這個策略的成本，所以只看邊際成本：
 
-| 指標 | 意思 | 未通過時，計畫的下一步 |
+| 指標 | 意思 | 角色 |
 |---|---|---|
-| 毛利中位數 ≥ $0.30 | 機會夠不夠大 | 流量問題 → 轉 Base（方案 B） |
-| 每天可爭取淨利 ≥ $20 | 被別的套利機器人吃掉、但不是在同一個區塊吃掉的利潤，扣掉 gas | 不夠付成本 → 停掉 |
-| 同區塊被吃掉比例 ≤ 50% | 是不是付費 Fast Feed 玩家在壟斷 | 評估 Fast Feed，或轉 B |
+| 每天可爭取淨利 ≥ $1 | 被別的套利機器人吃掉、但不是在同一個區塊吃掉的利潤，扣掉成功那筆的 gas | **唯一決定結論** |
+| 毛利中位數 | 平時的機會有多大 | 參考 |
+| 同區塊被吃掉比例 | 平時搶不搶得贏 | 參考 |
+| 擁擠度 | 對手成交的區塊裡，有多少合約呼叫失敗 | 參考：檢驗「失敗要付 gas 的鏈比較不擠」 |
 
-門檻都在 `config.toml` 的 `[gate]`。
+門檻都在各鏈設定檔的 `[gate]`。失敗要付 gas 的鏈（Base、Optimism、Polygon）在 `[detect] fail_cost_usd` 填一次失敗的成本，網頁會算出「撿到一單能付幾次失敗」。
 
 ## 在 Hetzner 上部署
 
@@ -25,13 +26,14 @@ git clone https://github.com/aceonaceon/flasharbEVM /opt/flasharb
 cd /opt/flasharb
 cp .env.example .env               # 網頁要對外時再填 TUNNEL_TOKEN（見下面）
 docker compose pull && docker compose up -d
-docker compose logs -f shadow      # 看進度
+docker compose logs -f shadow      # 看進度（其他鏈：shadow-bsc、shadow-eth、shadow-base、shadow-op、shadow-polygon）
 ```
 
 - 資料存在 Docker volume `flasharb-data`：`ledger.sqlite` 是帳本，`report.md` 每小時更新一次。要拿到主機上：`docker compose cp shadow:/app/data/report.md .`
 - 第一次啟動會往回補抓 6 小時（`backfill_hours`），所以當天就有數據。
 - 重新啟動會從上次停下的區塊接著跑，不會重複記錄。
-- 容器限制 384MB 記憶體、1 顆 CPU，不會影響同一台主機上的其他網站。
+- 每條鏈一個容器、一份設定檔（Arbitrum 是 `config.toml`，其他在 `configs/`）、一個 volume。Arbitrum 384MB / 1 CPU、Base 384MB、其他 256MB / 0.5 CPU，不會影響同一台主機上的其他網站。
+- 程式改了判斷方式（`CLASSIFIER_VERSION` 變了）時，帳本會重建，舊的先備份成 `ledger.v<舊版本>.sqlite`。
 - 如果 `docker compose pull` 顯示沒有權限，到 GitHub 的 Packages 把 `flasharbevm` 設成 Public（repo 本身是公開的，映像檔裡沒有任何秘密）。
 
 ## 狀態網頁
@@ -42,7 +44,7 @@ docker compose logs -f shadow      # 看進度
 2. 在這個 tunnel 加一個 Public Hostname，例如 `arb.你的網域`，Service 填 `http://shadow:8088`。
 3. Zero Trust → Access → Applications 新增這個子網域，Policy 只放行你自己的 email。
 
-畫面內容：判決燈號與距離第 14 天的倒數、三個指標的數值與每日趨勢、側錄健康狀態（處理到哪個區塊、落後多久、RPC 錯誤數）、機會怎麼結束的比例、最近 20 筆機會（連到 Arbiscan）、對手排行與對手平均 α。
+畫面內容：上方可以切換鏈（Arbitrum 的網頁代理其他鏈的資料，tunnel 只要一個）、判決燈號與距離第 30 天的倒數、指標的數值與每日趨勢、側錄健康狀態（處理到哪個區塊、落後多久、RPC 錯誤數）、機會怎麼結束的比例、最近 20 筆機會（連到 Arbiscan）、對手排行與對手平均 α、擁擠度（失敗比例）。
 
 只想在本機看帳本、不跑側錄時：`flasharb-shadow serve`。
 
@@ -55,10 +57,11 @@ docker compose cp shadow:/app/data/report.md . # 或複製最近一次自動產�
 
 ## 換成更快的 RPC（選用）
 
-預設用免費的 Arbitrum 公開 RPC。遇到速率限制、進度一直落後時，可以去 Alchemy 開一個**免費**帳號，然後在 `/opt/flasharb/.env` 寫：
+預設用免費的公開 RPC（Arbitrum 官方、其他鏈 publicnode）。六條鏈從同一台主機打出去，遇到速率限制、進度一直落後時，可以去 Alchemy 開一個**免費**帳號（同一把 key 可以用在每條鏈），然後在 `/opt/flasharb/.env` 寫：
 
 ```
 FLASHARB_RPC_URL=https://arb-mainnet.g.alchemy.com/v2/你的key
+FLASHARB_BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/你的key
 ```
 
 再 `docker compose up -d` 就會換過去。`.env` 不會進 git。
@@ -73,19 +76,21 @@ FLASHARB_RPC_URL=https://arb-mainnet.g.alchemy.com/v2/你的key
    - 只動到一個池子 → 一般交易剛好抹平（`organic`）
    - 10 分鐘都沒人動 → 過期（`stale`，通常是代幣有問題或流動性假象）
 5. 抽樣抓一部分套利者的交易收據，算出它們付的 priority fee 佔機會毛利的比例，也就是對手的 α。
+6. 同一批抽樣，再抓那個區塊的全部收據（`eth_getBlockReceipts`），數有多少合約呼叫失敗，當作擁擠度。
 
 ## 已知的近似
 
-- CL 池用目前 tick 範圍內的虛擬儲備估算。單筆量大到跨 tick 時會高估，所以價差超過 30% 的會另外標成「可疑」。
+- CL 池用目前 tick 區間內的虛擬儲備估算，投入量限制在不跨出這個區間，所以只會低估、不會高估。價差超過 30% 的另外標成「可疑」，報表會列出來。
 - 只看 Swap 事件，沒追 Mint/Burn。流動性變了，要等到下一筆 swap 才會更新。
 - Aero CL 的手續費由 hook 決定：這裡只算了 swap 前的費率，swap 後可能另外加收的部分沒算。
 - Camelot v3 的動態費率只在發現池子時讀一次。
 - 「可爭取利潤」是理論上限，還沒扣我們自己的延遲和勝率。
+- 擁擠度把「失敗的合約呼叫」都算成搶輸的機器人，其中也有一般使用者滑價失敗的交易，所以是上限。
 
 ## 開發
 
 ```bash
-cargo test          # 31 個單元測試，不需要網路
+cargo test          # 36 個單元測試，不需要網路
 cargo run -- run    # 本機直接跑
 ```
 

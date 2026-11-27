@@ -46,6 +46,10 @@ h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; color: var(--muted); }
 .metric .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .metric .label { font-size: 13px; color: var(--muted); }
 .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; font-weight: 600; }
+.chains { display: flex; gap: 6px; flex-wrap: wrap; }
+.chains button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; }
+.chains button.on { color: var(--text); border-color: var(--text); font-weight: 600; }
+.badge.ref { color: var(--muted); border: 1px solid var(--border); }
 .badge.ok { color: var(--pass); background: var(--pass-bg); } .badge.bad { color: var(--fail); background: var(--fail-bg); }
 .metric .val { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 4px 0 2px; }
 .metric .thr { font-size: 12px; color: var(--muted); }
@@ -84,7 +88,8 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
 <body>
 <div class="wrap">
   <header>
-    <h1>FlashArb 側錄 · Arbitrum</h1>
+    <h1>FlashArb 側錄 · <span id="chain-name">Arbitrum</span></h1>
+    <nav class="chains" id="chains"></nav>
     <span class="pill"><span class="dot" id="live-dot"></span><span id="live-text">連線中…</span></span>
   </header>
 
@@ -94,7 +99,7 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
       <ul class="reasons" id="reasons"></ul>
     </div>
     <div class="day">
-      <div style="font-size:12px;color:var(--muted)">距離第 14 天決策</div>
+      <div style="font-size:12px;color:var(--muted)">距離第 30 天決策</div>
       <b id="days-left">—</b> <span style="color:var(--muted)">天</span>
       <div class="bar"><i id="progress" style="width:0"></i></div>
     </div>
@@ -122,6 +127,12 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
     </div>
   </section>
 
+  <section class="card">
+    <h2>擁擠度：對手成交的區塊裡，有多少人失敗</h2>
+    <table class="tbl" id="crowding"></table>
+    <p style="font-size:12px;color:var(--muted);margin:10px 0 0">失敗比例越高，代表越多機器人在亂槍打鳥。切換不同鏈比較這一欄，就能檢驗「失敗要付 gas 的鏈比較不擠」。</p>
+  </section>
+
   <footer>只讀頁面：不持有私鑰、不送出交易。每 30 秒自動更新。<span id="updated"></span></footer>
 </div>
 
@@ -131,7 +142,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const usd = (v) => "$" + (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
 const pct = (v) => (v * 100).toFixed(0) + "%";
 const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "—";
-const scan = (kind, v, label) => v ? `<a class="mono" href="https://arbiscan.io/${kind}/${esc(v)}" target="_blank" rel="noopener">${esc(label ?? short(v))}</a>` : "—";
+let explorer = "https://arbiscan.io";
+const scan = (kind, v, label) => v ? `<a class="mono" href="${esc(explorer)}/${kind}/${esc(v)}" target="_blank" rel="noopener">${esc(label ?? short(v))}</a>` : "—";
 const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
 const fmtLag = (s) => s < 90 ? `${s} 秒` : s < 5400 ? `${Math.round(s / 60)} 分鐘` : `${(s / 3600).toFixed(1)} 小時`;
 
@@ -159,17 +171,18 @@ function spark(values, threshold, higherBetter) {
 
 function render(d) {
   const v = d.verdict;
+  if (d.chain) { explorer = d.chain.explorer; $("chain-name").textContent = d.chain.name; }
   $("verdict").className = "verdict " + v.state;
   $("verdict").textContent = VERDICT[v.state];
   $("reasons").innerHTML = v.reasons.map((r) => `<li>${esc(r)}</li>`).join("");
   $("days-left").textContent = v.days_left.toFixed(1);
-  $("progress").style.width = Math.min(100, (v.hours / 24 / 14) * 100).toFixed(1) + "%";
+  $("progress").style.width = Math.min(100, (v.hours / 24 / 30) * 100).toFixed(1) + "%";
 
   const series = { median: d.daily.map((x) => x.median_gross), addressable: d.daily.map((x) => x.addressable_usd), same_block: d.daily.map((x) => x.same_block_share) };
   $("metrics").innerHTML = d.metrics.map((m) => {
     const fmt = m.unit === "pct" ? pct : usd;
     return `<div class="card metric">
-      <div class="top"><span class="label">${esc(m.label)}</span><span class="badge ${m.ok ? "ok" : "bad"}">${m.ok ? "達標" : "未達"}</span></div>
+      <div class="top"><span class="label">${esc(m.label)}</span>${m.gating ? `<span class="badge ${m.ok ? "ok" : "bad"}">${m.ok ? "達標" : "未達"}</span>` : `<span class="badge ref">參考</span>`}</div>
       <div class="val">${fmt(m.value)}</div>
       <div class="thr">門檻 ${m.higher_is_better ? "≥" : "≤"} ${fmt(m.threshold)}${m.key === "addressable" ? "／天" : ""}</div>
       ${spark(series[m.key] || [], m.threshold, m.higher_is_better)}
@@ -210,12 +223,38 @@ function render(d) {
       d.closers.map((c) => `<tr><td>${scan("address", c.address)}</td><td class="num">${c.count.toLocaleString()}</td><td class="num">${pct(c.share)}</td></tr>`).join("")
     : `<tr><td class="empty">還沒有資料</td></tr>`;
   $("alpha").textContent = d.alpha == null ? "—" : d.alpha.toFixed(2);
+  const k = d.crowding || {};
+  const opt = (v, f) => (v == null ? "—" : f(v));
+  $("crowding").innerHTML = `
+    <tr><td>抽樣區塊數</td><td class="num">${(k.blocks || 0).toLocaleString()}</td></tr>
+    <tr><td>合約呼叫失敗比例</td><td class="num">${opt(k.reverted_call_share, pct)}</td></tr>
+    <tr><td>失敗吃掉的 gas 比例</td><td class="num">${opt(k.reverted_gas_share, pct)}</td></tr>
+    <tr><td>每個區塊平均失敗幾筆</td><td class="num">${opt(k.reverted_per_block, (v) => v.toFixed(1))}</td></tr>
+    <tr><td>有成交的對手數 / 最大一家佔比</td><td class="num">${k.rivals || 0} / ${opt(k.top_rival_share, pct)}</td></tr>
+    <tr><td>我們失敗一次的成本</td><td class="num">${k.fail_cost_usd ? "$" + k.fail_cost_usd.toFixed(3) : "免費"}</td></tr>
+    <tr><td>撿到一單（中位數）能付幾次失敗</td><td class="num">${opt(k.misses_per_win, (v) => v.toFixed(0) + " 次")}</td></tr>`;
   $("updated").textContent = " 最後更新：" + new Date().toLocaleTimeString("zh-TW", { hour12: false });
 }
 
+let chain = null;
+try { chain = localStorage.getItem("flasharb-chain"); } catch (_) {}
+async function loadChains() {
+  try {
+    const list = await (await fetch("api/chains", { cache: "no-store" })).json();
+    if (!list.includes(chain)) chain = list[0];
+    $("chains").innerHTML = list.length < 2 ? "" : list.map((c) =>
+      `<button type="button" data-c="${esc(c)}" class="${c === chain ? "on" : ""}">${esc(c)}</button>`).join("");
+    $("chains").querySelectorAll("button").forEach((b) => b.onclick = () => {
+      chain = b.dataset.c;
+      try { localStorage.setItem("flasharb-chain", chain); } catch (_) {}
+      loadChains();
+    });
+  } catch (_) {}
+  load();
+}
 async function load() {
   try {
-    const r = await fetch("api/summary", { cache: "no-store" });
+    const r = await fetch("api/summary" + (chain ? "?chain=" + encodeURIComponent(chain) : ""), { cache: "no-store" });
     if (!r.ok) throw new Error(await r.text());
     render(await r.json());
   } catch (e) {
@@ -223,7 +262,7 @@ async function load() {
     $("live-text").textContent = "讀不到資料：" + e.message.slice(0, 80);
   }
 }
-load();
+loadChains();
 setInterval(load, 30000);
 </script>
 </body>

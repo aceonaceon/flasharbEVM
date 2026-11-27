@@ -18,7 +18,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Config;
 use detector::{CloseKind, Detector};
-use ledger::{CloserTx, Ledger};
+use ledger::{BlockStats, CloserTx, Ledger};
 use price::Oracle;
 use rpc::Rpc;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -136,12 +136,22 @@ struct Runner {
 async fn run(cfg: Config) -> Result<()> {
     let rpc = Rpc::new(&cfg.rpc)?;
     let ledger = Ledger::open(cfg.run.db_path.as_ref())?;
-    let oracle = Oracle::new(cfg.tokens.weth, cfg.tokens.stables.clone());
+    let oracle = Oracle::new(cfg.tokens.weth, cfg.tokens.stables.clone()).with_stables18(cfg.tokens.stables18.clone());
     let mut det = Detector::new(cfg.detect.clone(), oracle, cfg.tokens.majors.clone());
     let want = pools::CLASSIFIER_VERSION.to_string();
-    if ledger.meta("classifier_version")?.as_deref() != Some(want.as_str()) {
+    let have = ledger.meta("classifier_version")?;
+    if have.as_deref() != Some(want.as_str()) {
         if ledger.last_block()?.is_some() {
-            warn!(version = %want, "pool classification rules changed: rebuilding the ledger from scratch");
+            // Keep the old numbers for comparison before wiping them.
+            let old = have.unwrap_or_else(|| "0".into());
+            let backup = PathBuf::from(&cfg.run.db_path).with_file_name(format!("ledger.v{old}.sqlite"));
+            if !backup.exists() {
+                match ledger.conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()]) {
+                    Ok(_) => info!(path = %backup.display(), "old ledger saved"),
+                    Err(e) => warn!(error = %e, "could not save the old ledger"),
+                }
+            }
+            warn!(version = %want, "detection rules changed: rebuilding the ledger from scratch");
         }
         ledger.reset()?;
         ledger.set_meta("classifier_version", &want)?;
@@ -383,6 +393,20 @@ impl Runner {
             priority_usd: usd(priority_wei),
             total_fee_usd: usd(total_wei),
         })?;
+        // How many other attempts failed in the same block? Best effort: some RPCs lack this method.
+        if !self.ledger.has_block_stats(block)? {
+            match self.rpc.block_receipts(block).await {
+                Ok(Some(rcs)) => {
+                    let stats = BlockStats::tally(
+                        block,
+                        rcs.iter().map(|r| (r.status(), !r.inner.logs().is_empty(), r.gas_used)),
+                    );
+                    self.ledger.insert_block_stats(&stats)?;
+                }
+                Ok(None) => {}
+                Err(e) => warn!(error = %e, block, "block receipts lookup failed"),
+            }
+        }
         Ok(())
     }
 }

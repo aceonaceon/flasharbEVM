@@ -1,6 +1,10 @@
 # FlashArb 側錄器設定檔（只記錄、不送單）
 # 所有門檻都是起始值，看完第一份報表後再調。
 
+[chain]
+name = "Arbitrum"
+explorer = "https://arbiscan.io"
+
 [rpc]
 # 免費的 Arbitrum 公開 RPC。換成 Alchemy 免費方案的網址會快很多（也可以用環境變數 FLASHARB_RPC_URL 覆蓋）。
 url = "https://arb1.arbitrum.io/rpc"
@@ -34,11 +38,11 @@ min_pool_liquidity_usd = 2000.0
 max_closer_tx_lookups = 400
 
 [gate]
-# 通過門檻：三個條件全部成立才建議進入方案 2（Rust 即時側錄）
+# 打法是「平時等待、出事撿漏」：主機是共用的，Arbitrum 上失敗的條件式交易不付錢，
+# 所以唯一的邊際成本是成功那筆的 gas（已從可爭取利潤扣掉）。只有這一項決定通過與否。
+min_addressable_usd_per_day = 1.0
+# 以下兩項只當參考，不影響結論
 min_median_gross_usd = 0.30
-# 每天「可爭取的利潤」至少要是主機月費 / 30 的幾倍
-min_addressable_usd_per_day = 20.0
-# 被吃掉的機會裡，同一個區塊就被吃掉的比例上限（超過代表 Fast Feed 玩家壟斷）
 max_same_block_share = 0.5
 
 [tokens]
@@ -116,3 +120,24 @@ fee_bps = 30
 # 狀態網頁。Docker 裡只在內部網路開放，對外由 Cloudflare Tunnel 轉進來，不開任何 port。
 enabled = true
 bind = "0.0.0.0:8088"
+
+# 其他鏈的側錄器（同一個 docker compose 裡），網頁上可以切換。沒在跑的鏈會顯示讀不到資料。
+[[web.peers]]
+name = "BSC"
+url = "http://shadow-bsc:8088"
+
+[[web.peers]]
+name = "Ethereum"
+url = "http://shadow-eth:8088"
+
+[[web.peers]]
+name = "Base"
+url = "http://shadow-base:8088"
+
+[[web.peers]]
+name = "Optimism"
+url = "http://shadow-op:8088"
+
+[[web.peers]]
+name = "Polygon"
+url = "http://shadow-polygon:8088"

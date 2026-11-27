@@ -86,27 +86,24 @@ pub fn gate(s: &Stats, cfg: &Config) -> Verdict {
         pass = false;
         reasons.push(format!("數據還不到 24 小時（目前 {:.1} 小時），先不下結論", s.hours));
     }
-    if median < g.min_median_gross_usd {
-        pass = false;
-        reasons.push(format!("流量問題：毛利中位數 ${median:.2} < ${:.2} → 計畫建議轉 B", g.min_median_gross_usd));
-    }
     if per_day < g.min_addressable_usd_per_day {
         pass = false;
         reasons.push(format!(
-            "可爭取利潤每天 ${per_day:.2} < ${:.2}，不夠付成本",
+            "扣完 gas 後，每天能撿的利潤 ${per_day:.2} < ${:.2}",
             g.min_addressable_usd_per_day
         ));
+    } else {
+        reasons.push(format!("扣完 gas 後，每天能撿的利潤 ${per_day:.2} ≥ ${:.2}", g.min_addressable_usd_per_day));
+    }
+    // Context only: they describe the competition, not whether picking up leftovers pays.
+    if median < g.min_median_gross_usd {
+        reasons.push(format!("參考：毛利中位數 ${median:.2}，平時的機會很小"));
     }
     if share > g.max_same_block_share {
-        pass = false;
-        reasons.push(format!(
-            "Fast Feed 不對稱：{:.0}% 的機會在同一個區塊就被吃掉 > {:.0}% → 評估 Fast Feed 或轉 B",
-            share * 100.0,
-            g.max_same_block_share * 100.0
-        ));
+        reasons.push(format!("參考：{:.0}% 的機會在同一個區塊就被吃掉，平時搶不贏", share * 100.0));
     }
     if pass {
-        reasons.push("三個指標都通過 → 可以進入合約開發與小額上線".into());
+        reasons.push("扣完 gas 是正的 → 可以進入合約設計（動用資金前仍需你同意）".into());
     }
     Verdict { pass, reasons }
 }
@@ -151,7 +148,7 @@ pub fn render(c: &Connection, cfg: &Config) -> Result<String> {
     writeln!(o, "\n## 覆蓋範圍\n")?;
     writeln!(o, "- 記錄時數：{:.1} 小時，{} 個區塊", s.hours, s.blocks)?;
     writeln!(o, "- 已驗證池子：{}；被排除：{}", s.pools_verified, s.pools_rejected)?;
-    writeln!(o, "\n## 三個判斷指標\n")?;
+    writeln!(o, "\n## 判斷指標（只有第二項決定結論）\n")?;
     writeln!(o, "| 指標 | 數值 | 門檻 |\n|---|---|---|")?;
     writeln!(o, "| 毛利中位數 | ${:.2} | ≥ ${:.2} |", quantile(&s.clean, 0.5), cfg.gate.min_median_gross_usd)?;
     writeln!(
@@ -187,6 +184,31 @@ pub fn render(c: &Connection, cfg: &Config) -> Result<String> {
           COUNT(*), SUM(gross_usd), AVG(gross_usd)
          FROM opportunities GROUP BY k ORDER BY COUNT(*) DESC",
         &["結束方式", "次數", "毛利合計 $", "平均 $"],
+    )?;
+    writeln!(o, "## 能撿的利潤集中在哪些時段（前 10 小時，台灣時間）\n")?;
+    writeln!(o, "這個打法靠的是市場波動時剩下來的單。如果利潤集中在少數幾個小時，代表它真的是「出事才有」。\n")?;
+    table(
+        c,
+        &mut o,
+        &format!(
+            "SELECT strftime('%m-%d %H:00', open_ts, 'unixepoch', '+8 hours') AS h,
+               COUNT(*),
+               SUM(CASE WHEN close_kind='arb' AND same_block=0 AND gross_usd>{gas} THEN gross_usd-{gas} ELSE 0 END) AS pick,
+               MAX(gross_usd)
+             FROM opportunities WHERE suspect=0 AND close_kind!='stale'
+             GROUP BY h HAVING pick > 0 ORDER BY pick DESC LIMIT 10"
+        ),
+        &["時段", "機會數", "能撿的淨利 $", "最大單筆毛利 $"],
+    )?;
+    writeln!(o, "## 大價差事件（價差 > {:.0}%，待驗證）\n", cfg.detect.suspect_gap_pct)?;
+    writeln!(o, "這些不算進上面的數字，因為可能是資料錯誤；但也可能正是「池子被打穿、對手沒搶完」的那種單，要逐筆驗證。\n")?;
+    table(
+        c,
+        &mut o,
+        "SELECT strftime('%m-%d %H:%M', open_ts, 'unixepoch', '+8 hours'), venue_a||' × '||venue_b,
+           gap_pct, gross_usd, close_kind, delay_blocks, close_tx
+         FROM opportunities WHERE suspect=1 ORDER BY open_ts DESC LIMIT 20",
+        &["時間", "組合", "價差 %", "估計毛利 $", "結束方式", "幾個區塊後", "結束交易"],
     )?;
     writeln!(o, "## 主流幣 vs 長尾\n")?;
     table(
@@ -229,6 +251,22 @@ pub fn render(c: &Connection, cfg: &Config) -> Result<String> {
          FROM closer_txs t JOIN opportunities o ON o.id=t.opp_id",
         &["樣本數", "平均 priority fee $", "平均總手續費 $", "平均 α"],
     )?;
+    writeln!(o, "## 擁擠度：別人失敗了多少次（抽樣）\n")?;
+    writeln!(o, "抽樣「對手套利成交的那個區塊」，數裡面有多少合約呼叫失敗。失敗越多，代表越多機器人在同一個機會上亂槍打鳥。\n")?;
+    table(
+        c,
+        &mut o,
+        "SELECT COUNT(*), SUM(calls), SUM(reverted),
+           ROUND(100.0*SUM(reverted)/MAX(SUM(calls),1),1),
+           ROUND(100.0*SUM(reverted_gas)/MAX(SUM(gas),1),1)
+         FROM block_stats",
+        &["抽樣區塊", "合約呼叫", "失敗", "失敗比例 %", "失敗吃掉的 gas %"],
+    )?;
+    if cfg.detect.fail_cost_usd > 0.0 {
+        writeln!(o, "這條鏈失敗一次要付約 ${:.3} 的 gas。\n", cfg.detect.fail_cost_usd)?;
+    } else {
+        writeln!(o, "這條鏈失敗不用付錢（條件式交易或私有打包）。\n")?;
+    }
     writeln!(o, "## 沒被認得的 factory（前 5，看到大的可以補進 config.toml）\n")?;
     table(
         c,
@@ -302,12 +340,13 @@ mod tests {
         assert!((s.per_day(s.addressable_usd) - 48.5).abs() < 1e-6);
         assert!(gate(&s, &cfg).pass);
 
-        // Make them all same-block -> Fast Feed asymmetry fails the gate.
+        // All same-block: nothing is left to pick up, so the gate fails;
+        // the same-block share shows up as context only.
         l.conn.execute("UPDATE opportunities SET same_block=1, delay_blocks=0", []).unwrap();
         let s = collect(&l.conn, &cfg).unwrap();
         let v = gate(&s, &cfg);
         assert!(!v.pass);
-        assert!(v.reasons.iter().any(|r| r.contains("Fast Feed")));
+        assert!(v.reasons.iter().any(|r| r.starts_with("參考") && r.contains("同一個區塊")));
 
         let md = render(&l.conn, &cfg).unwrap();
         assert!(md.contains("未通過"));

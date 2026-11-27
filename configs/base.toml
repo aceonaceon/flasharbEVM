@@ -1,0 +1,93 @@
+# FlashArb 側錄器：Base（只記錄、不送單）
+# 失敗的交易要付 gas（金額很小）。拿來檢驗「失敗要付錢 → 套利者比較少」這個假設。
+
+[chain]
+name = "Base"
+explorer = "https://basescan.org"
+
+[rpc]
+# 免費公開 RPC；可用環境變數 FLASHARB_RPC_URL 覆蓋（.env 裡的 FLASHARB_BASE_RPC_URL）
+url = "https://base-rpc.publicnode.com"
+max_rps = 4
+initial_log_range = 20
+max_log_range = 500
+timeout_sec = 30
+
+[run]
+db_path = "data/ledger.sqlite"
+poll_ms = 2000
+backfill_hours = 6
+warmup_minutes = 10
+
+[detect]
+# 約 2 秒一個區塊：300 個區塊約 10 分鐘
+stale_blocks = 300
+min_gross_usd = 0.10
+# 成功一筆兩腳套利的 gas（含 L1 資料費）
+gas_cost_usd = 0.02
+# 失敗一次的 gas（通常在第一個 swap 前就 revert，用得比較少）
+fail_cost_usd = 0.005
+suspect_gap_pct = 30.0
+min_pool_liquidity_usd = 2000.0
+max_closer_tx_lookups = 400
+
+[gate]
+min_addressable_usd_per_day = 1.0
+min_median_gross_usd = 0.30
+max_same_block_share = 0.5
+
+[tokens]
+weth = "0x4200000000000000000000000000000000000006"
+stables = [
+  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", # USDC
+  "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", # USDbC
+]
+stables18 = [
+  "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", # DAI
+]
+majors = [
+  "0x4200000000000000000000000000000000000006", # WETH
+  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", # USDC
+  "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", # USDbC
+  "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", # DAI
+  "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", # cbBTC
+]
+
+[discovery]
+auto_accept_unknown_factories = true
+
+[[factories]]
+name = "uniswap_v3"
+kind = "univ3"
+address = "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+
+[[factories]]
+name = "pancake_v3"
+kind = "univ3"
+address = "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
+
+[[factories]]
+name = "sushi_v3"
+kind = "univ3"
+address = "0xc35DADB65012eC5796536bD9864eD8773aBc74C4"
+
+[[factories]]
+name = "aerodrome_cl"
+kind = "aero_cl"
+address = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
+
+[[factories]]
+name = "aerodrome_v2"
+kind = "aero_v2"
+address = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
+fee_bps = 30
+
+[[factories]]
+name = "uniswap_v2"
+kind = "univ2"
+address = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6"
+fee_bps = 30
+
+[web]
+enabled = true
+bind = "0.0.0.0:8088"

@@ -15,6 +15,21 @@ pub struct Config {
     pub web: WebCfg,
     #[serde(default)]
     pub discovery: DiscoveryCfg,
+    #[serde(default)]
+    pub chain: ChainCfg,
+}
+
+/// Which chain this instance watches; only used for labels and explorer links.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct ChainCfg {
+    pub name: String,
+    pub explorer: String,
+}
+
+impl Default for ChainCfg {
+    fn default() -> Self {
+        Self { name: "Arbitrum".into(), explorer: "https://arbiscan.io".into() }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,11 +51,21 @@ pub struct WebCfg {
     pub enabled: bool,
     #[serde(default = "default_bind")]
     pub bind: String,
+    /// Other chains' recorders whose summaries this dashboard can show (proxied, read-only).
+    #[serde(default)]
+    pub peers: Vec<PeerCfg>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PeerCfg {
+    pub name: String,
+    /// Base URL of the peer's dashboard, e.g. http://shadow-bsc:8088
+    pub url: String,
 }
 
 impl Default for WebCfg {
     fn default() -> Self {
-        Self { enabled: true, bind: default_bind() }
+        Self { enabled: true, bind: default_bind(), peers: Vec::new() }
     }
 }
 
@@ -76,6 +101,17 @@ pub struct DetectCfg {
     pub suspect_gap_pct: f64,
     pub min_pool_liquidity_usd: f64,
     pub max_closer_tx_lookups: u64,
+    /// An opportunity still open after this many blocks is closed as stale (~10 minutes).
+    #[serde(default = "default_stale_blocks")]
+    pub stale_blocks: u64,
+    /// What one failed attempt would cost us (USD). 0 where failures are free
+    /// (Arbitrum conditional txs, private bundles); a little gas on Base / Optimism / Polygon.
+    #[serde(default)]
+    pub fail_cost_usd: f64,
+}
+
+fn default_stale_blocks() -> u64 {
+    crate::detector::STALE_BLOCKS
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,7 +124,11 @@ pub struct GateCfg {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokensCfg {
     pub weth: Address,
+    /// Stablecoins with 6 decimals.
     pub stables: Vec<Address>,
+    /// Stablecoins with 18 decimals (BSC's USDT/USDC, DAI).
+    #[serde(default)]
+    pub stables18: Vec<Address>,
     pub majors: Vec<Address>,
 }
 
@@ -146,5 +186,30 @@ mod tests {
         assert!(cfg.factories.len() >= 4);
         assert!(cfg.factories.iter().any(|f| f.kind == FactoryKind::AeroCl));
         assert_eq!(cfg.tokens.stables.len(), 3);
+        assert_eq!(cfg.chain.name, "Arbitrum");
+        assert_eq!(cfg.web.peers.len(), 5);
+        assert_eq!(cfg.detect.fail_cost_usd, 0.0);
+    }
+
+    #[test]
+    fn chain_configs_parse() {
+        for (file, name, stale) in [
+            ("bsc.toml", "BSC", 800),
+            ("ethereum.toml", "Ethereum", 50),
+            ("base.toml", "Base", 300),
+            ("optimism.toml", "Optimism", 300),
+            ("polygon.toml", "Polygon", 300),
+        ] {
+            let p = format!("{}/configs/{file}", env!("CARGO_MANIFEST_DIR"));
+            let cfg = Config::load(Path::new(&p)).unwrap_or_else(|e| panic!("{file}: {e:#}"));
+            assert_eq!(cfg.chain.name, name);
+            assert_eq!(cfg.detect.stale_blocks, stale);
+            assert!(!cfg.factories.is_empty());
+            assert!(cfg.web.peers.is_empty());
+        }
+        let bsc = Config::load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/configs/bsc.toml"))).unwrap();
+        assert_eq!(bsc.tokens.stables18.len(), 2);
+        let base = Config::load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/configs/base.toml"))).unwrap();
+        assert!(base.detect.fail_cost_usd > 0.0);
     }
 }

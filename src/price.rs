@@ -2,8 +2,8 @@
 //!
 //! Stablecoins are $1. WETH is priced from its deepest stable pool. Every other
 //! token is priced from its deepest pool against WETH or a stable. Prices are
-//! per *raw* unit, so token decimals are never needed (the three stables on
-//! Arbitrum all use 6 decimals, which is configured as STABLE_DECIMALS).
+//! per *raw* unit, so token decimals are never needed except for the stables
+//! themselves: 6 by default, 18 for those listed in `tokens.stables18`.
 
 use crate::amm::Reserves;
 use alloy::primitives::Address;
@@ -23,12 +23,20 @@ struct Quote {
 pub struct Oracle {
     weth: Address,
     stables: Vec<Address>,
+    stables18: Vec<Address>,
     quotes: HashMap<Address, Quote>,
 }
 
 impl Oracle {
     pub fn new(weth: Address, stables: Vec<Address>) -> Self {
-        Self { weth, stables, quotes: HashMap::new() }
+        Self { weth, stables, stables18: Vec::new(), quotes: HashMap::new() }
+    }
+
+    /// Add stablecoins that use 18 decimals.
+    pub fn with_stables18(mut self, v: Vec<Address>) -> Self {
+        self.stables.extend(v.iter().copied());
+        self.stables18 = v;
+        self
     }
 
     pub fn is_stable(&self, t: Address) -> bool {
@@ -37,7 +45,8 @@ impl Oracle {
 
     pub fn usd_per_raw(&self, t: Address) -> Option<f64> {
         if self.is_stable(t) {
-            return Some(10f64.powi(-STABLE_DECIMALS));
+            let dec = if self.stables18.contains(&t) { 18 } else { STABLE_DECIMALS };
+            return Some(10f64.powi(-dec));
         }
         self.quotes.get(&t).map(|q| q.usd_per_raw)
     }

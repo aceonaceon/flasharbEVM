@@ -9,10 +9,12 @@ use serde::Serialize;
 /// Days are cut at midnight Taipei time (UTC+8).
 const TZ_OFFSET: &str = "+8 hours";
 /// The plan's first decision point.
-pub const DECISION_DAY: f64 = 14.0;
+/// Leftovers show up in volatile markets, which may take weeks to arrive.
+pub const DECISION_DAY: f64 = 30.0;
 
 #[derive(Debug, Serialize)]
 pub struct Summary {
+    pub chain: crate::config::ChainCfg,
     pub verdict: Verdict,
     pub metrics: Vec<Metric>,
     pub health: Health,
@@ -21,6 +23,28 @@ pub struct Summary {
     pub recent: Vec<Recent>,
     pub closers: Vec<Closer>,
     pub alpha: Option<f64>,
+    pub crowding: Crowding,
+}
+
+/// Tests "chains where failing costs gas are less crowded".
+#[derive(Debug, Serialize, Default)]
+pub struct Crowding {
+    /// Blocks sampled (ones where a rival arb landed).
+    pub blocks: i64,
+    /// Reverted contract calls ÷ contract calls in those blocks.
+    pub reverted_call_share: Option<f64>,
+    /// Gas burned by reverted txs ÷ all gas in those blocks.
+    pub reverted_gas_share: Option<f64>,
+    /// Reverted calls per sampled block.
+    pub reverted_per_block: Option<f64>,
+    /// Distinct contracts that took opportunities.
+    pub rivals: i64,
+    /// Share taken by the biggest one.
+    pub top_rival_share: Option<f64>,
+    /// What one failed attempt costs us here.
+    pub fail_cost_usd: f64,
+    /// Median net profit per pickup ÷ fail cost: how many misses one win can pay for.
+    pub misses_per_win: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +66,8 @@ pub struct Metric {
     pub higher_is_better: bool,
     pub unit: &'static str,
     pub ok: bool,
+    /// false: shown for context only, does not decide the verdict.
+    pub gating: bool,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -161,6 +187,7 @@ pub fn build(c: &Connection, cfg: &Config, live: &Live) -> Result<Summary> {
             higher_is_better: true,
             unit: "usd",
             ok: median >= g.min_median_gross_usd,
+            gating: false,
         },
         Metric {
             key: "addressable",
@@ -170,6 +197,7 @@ pub fn build(c: &Connection, cfg: &Config, live: &Live) -> Result<Summary> {
             higher_is_better: true,
             unit: "usd",
             ok: per_day >= g.min_addressable_usd_per_day,
+            gating: true,
         },
         Metric {
             key: "same_block",
@@ -179,6 +207,7 @@ pub fn build(c: &Connection, cfg: &Config, live: &Live) -> Result<Summary> {
             higher_is_better: false,
             unit: "pct",
             ok: share <= g.max_same_block_share,
+            gating: false,
         },
     ];
 
@@ -316,7 +345,10 @@ pub fn build(c: &Connection, cfg: &Config, live: &Live) -> Result<Summary> {
         |r| r.get(0),
     )?;
 
+    let crowding = crowding(c, cfg, &s)?;
+
     Ok(Summary {
+        chain: cfg.chain.clone(),
         verdict: Verdict {
             state,
             reasons: v.reasons,
@@ -330,6 +362,41 @@ pub fn build(c: &Connection, cfg: &Config, live: &Live) -> Result<Summary> {
         recent,
         closers,
         alpha,
+        crowding,
+    })
+}
+
+fn crowding(c: &Connection, cfg: &Config, s: &crate::report::Stats) -> Result<Crowding> {
+    let (blocks, calls, reverted, block_gas, rgas): (i64, i64, i64, i64, i64) = c.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(calls),0), COALESCE(SUM(reverted),0), COALESCE(SUM(gas),0), COALESCE(SUM(reverted_gas),0)
+         FROM block_stats",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )?;
+    let ratio = |a: i64, b: i64| (b > 0).then(|| a as f64 / b as f64);
+    let (rivals, top): (i64, Option<i64>) = c.query_row(
+        "SELECT COUNT(*), MAX(n) FROM (SELECT COUNT(*) n FROM opportunities
+         WHERE close_kind='arb' AND suspect=0 AND closer_sender IS NOT NULL GROUP BY closer_sender)",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let fail = cfg.detect.fail_cost_usd;
+    let gas_usd = cfg.detect.gas_cost_usd;
+    let mut st = c.prepare(
+        "SELECT gross_usd - ?1 FROM opportunities
+         WHERE suspect=0 AND close_kind='arb' AND same_block=0 AND gross_usd > ?1 ORDER BY 1",
+    )?;
+    let nets: Vec<f64> = st.query_map([gas_usd], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    let net = (!nets.is_empty()).then(|| quantile(&nets, 0.5));
+    Ok(Crowding {
+        blocks,
+        reverted_call_share: ratio(reverted, calls),
+        reverted_gas_share: ratio(rgas, block_gas),
+        reverted_per_block: ratio(reverted, blocks),
+        rivals,
+        top_rival_share: top.and_then(|t| ratio(t, s.arb_total as i64)),
+        fail_cost_usd: fail,
+        misses_per_win: (fail > 0.0).then_some(()).and(net).map(|n| n / fail),
     })
 }
 

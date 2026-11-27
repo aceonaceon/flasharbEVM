@@ -3,8 +3,10 @@
 //! Every pool is reduced to "virtual reserves" (x, y) in raw token units:
 //! - v2 pools: the actual reserves from the Sync event.
 //! - concentrated-liquidity pools: x = L / sqrtP, y = L * sqrtP, which is exact
-//!   while the price stays inside the current tick range. Crossing a tick
-//!   changes L, so for large trades this is an approximation; the report says so.
+//!   only while the price stays inside the current tick-spacing bucket. Outside
+//!   it L is unknown (often far smaller), so each CL pool also carries the most
+//!   it can absorb before leaving the bucket, and trades are capped there. That
+//!   makes CL profits a lower bound instead of a (sometimes wild) overestimate.
 //!
 //! Two constant-product legs compose into a single Möbius map, which gives the
 //! optimal input and profit in closed form (no numeric search on the hot path).
@@ -15,22 +17,37 @@ pub struct Reserves {
     pub r0: f64,
     pub r1: f64,
     pub gamma: f64,
+    /// Largest token0 input (before fee) the pool is known to absorb at this L.
+    pub cap_in0: f64,
+    /// Largest token1 input (before fee) the pool is known to absorb at this L.
+    pub cap_in1: f64,
 }
 
 impl Reserves {
-    pub fn from_cl(sqrt_price_x96: f64, liquidity: f64, fee_ppm: u32) -> Option<Self> {
+    /// `tick_spacing` <= 0 means unknown: assume a single tick (most conservative).
+    pub fn from_cl(sqrt_price_x96: f64, liquidity: f64, fee_ppm: u32, tick_spacing: i32) -> Option<Self> {
         if !(sqrt_price_x96 > 0.0) || !(liquidity > 0.0) {
             return None;
         }
         let sqrt_p = sqrt_price_x96 / 2f64.powi(96);
-        Some(Self { r0: liquidity / sqrt_p, r1: liquidity * sqrt_p, gamma: gamma(fee_ppm) })
+        let g = gamma(fee_ppm);
+        let ts = tick_spacing.max(1) as f64;
+        // Bucket [lo, lo + ts) containing the current tick; sqrt(1.0001^t) = 1.0001^(t/2).
+        let tick = (sqrt_p * sqrt_p).ln() / 1.0001f64.ln();
+        let lo = (tick / ts).floor() * ts;
+        let sqrt_lo = 1.0001f64.powf(lo / 2.0);
+        let sqrt_hi = 1.0001f64.powf((lo + ts) / 2.0);
+        // token1 in pushes the price up to the top edge; token0 in pushes it down to the bottom edge.
+        let cap_in1 = (liquidity * (sqrt_hi - sqrt_p)).max(0.0) / g;
+        let cap_in0 = (liquidity * (1.0 / sqrt_lo - 1.0 / sqrt_p)).max(0.0) / g;
+        Some(Self { r0: liquidity / sqrt_p, r1: liquidity * sqrt_p, gamma: g, cap_in0, cap_in1 })
     }
 
     pub fn from_v2(r0: f64, r1: f64, fee_ppm: u32) -> Option<Self> {
         if !(r0 > 0.0) || !(r1 > 0.0) {
             return None;
         }
-        Some(Self { r0, r1, gamma: gamma(fee_ppm) })
+        Some(Self { r0, r1, gamma: gamma(fee_ppm), cap_in0: f64::INFINITY, cap_in1: f64::INFINITY })
     }
 
     /// Price of token0 in token1 raw units.
@@ -90,17 +107,39 @@ pub fn two_leg_optimum(y1: f64, x1: f64, g1: f64, x2: f64, y2: f64, g2: f64) -> 
     }
 }
 
+/// The two-leg optimum, with the input limited so neither leg leaves the range
+/// where its reserves are known (`cap1` on leg 1's input, `cap2` on leg 2's input).
+/// Profit is concave in the input, so the capped point is the best feasible one.
+#[allow(clippy::too_many_arguments)]
+pub fn two_leg_capped(
+    y1: f64, x1: f64, g1: f64, cap1: f64,
+    x2: f64, y2: f64, g2: f64, cap2: f64,
+) -> Option<(f64, f64)> {
+    let (d_opt, p_opt) = two_leg_optimum(y1, x1, g1, x2, y2, g2)?;
+    // Leg 1 output o = x1 g1 d / (y1 + g1 d); inverting at o = cap2 bounds d.
+    let d_cap2 = if cap2 >= x1 { f64::INFINITY } else { y1 * cap2 / (g1 * (x1 - cap2)) };
+    let d_max = cap1.min(d_cap2);
+    if d_opt <= d_max {
+        return Some((d_opt, p_opt));
+    }
+    let d = d_max;
+    let o1 = x1 * g1 * d / (y1 + g1 * d);
+    let o2 = y2 * g2 * o1 / (x2 + g2 * o1);
+    let profit = o2 - d;
+    (d > 0.0 && profit > 0.0 && profit.is_finite()).then_some((d, profit))
+}
+
 /// Best arbitrage between two pools of the same pair, if any.
 pub fn best_arb(p: &Reserves, q: &Reserves) -> Option<Arb> {
     // Profit in token1: token1 into P (input r1p, output r0p), token0 into Q (input r0q, output r1q).
-    let a1 = two_leg_optimum(p.r1, p.r0, p.gamma, q.r0, q.r1, q.gamma).map(|(d, pr)| Arb {
+    let a1 = two_leg_capped(p.r1, p.r0, p.gamma, p.cap_in1, q.r0, q.r1, q.gamma, q.cap_in0).map(|(d, pr)| Arb {
         dir: Dir::BuyOnPSellOnQProfit1,
         amount_in: d,
         profit: pr,
         profit_token: 1,
     });
     // Profit in token0: token0 into P (input r0p, output r1p), token1 into Q (input r1q, output r0q).
-    let a0 = two_leg_optimum(p.r0, p.r1, p.gamma, q.r1, q.r0, q.gamma).map(|(d, pr)| Arb {
+    let a0 = two_leg_capped(p.r0, p.r1, p.gamma, p.cap_in0, q.r1, q.r0, q.gamma, q.cap_in1).map(|(d, pr)| Arb {
         dir: Dir::BuyOnPSellOnQProfit0,
         amount_in: d,
         profit: pr,
@@ -178,15 +217,47 @@ mod tests {
     fn cl_virtual_reserves_reproduce_price() {
         // sqrtPriceX96 for price 4.0 (token1 per token0) is 2 * 2^96.
         let s = 2.0 * 2f64.powi(96);
-        let r = Reserves::from_cl(s, 1e18, 500).unwrap();
+        let r = Reserves::from_cl(s, 1e18, 500, 10).unwrap();
         assert!((r.price() - 4.0).abs() < 1e-9);
         assert!((r.r0 * r.r1 - 1e36).abs() / 1e36 < 1e-9); // x*y = L^2
     }
 
     #[test]
+    fn cl_caps_stop_at_bucket_edge() {
+        let s = 2.0 * 2f64.powi(96); // price 4.0, tick ~13863
+        let l = 1e18;
+        let r = Reserves::from_cl(s, l, 0, 60).unwrap();
+        // Pushing token1 in by exactly the cap must land on the bucket's top edge (a multiple of 60).
+        let sqrt_after = 2.0 + r.cap_in1 / l;
+        let tick_after = (sqrt_after * sqrt_after).ln() / 1.0001f64.ln();
+        assert!((tick_after / 60.0 - (tick_after / 60.0).round()).abs() < 1e-6, "tick {tick_after}");
+        assert!(r.cap_in0 > 0.0 && r.cap_in1 > 0.0);
+        // Wider spacing means more room.
+        let wide = Reserves::from_cl(s, l, 0, 200).unwrap();
+        assert!(wide.cap_in0 + wide.cap_in1 > r.cap_in0 + r.cap_in1);
+    }
+
+    #[test]
+    fn capped_profit_is_never_above_uncapped() {
+        let s = 2.0 * 2f64.powi(96);
+        let p = Reserves::from_cl(s, 1e20, 500, 1).unwrap();
+        let q = Reserves::from_cl(s * 1.02, 1e20, 500, 1).unwrap(); // ~4% price gap
+        let capped = best_arb(&p, &q).unwrap();
+        let mut p_inf = p;
+        let mut q_inf = q;
+        for r in [&mut p_inf, &mut q_inf] {
+            r.cap_in0 = f64::INFINITY;
+            r.cap_in1 = f64::INFINITY;
+        }
+        let free = best_arb(&p_inf, &q_inf).unwrap();
+        assert!(capped.profit > 0.0);
+        assert!(capped.profit < free.profit * 0.1, "capped {} free {}", capped.profit, free.profit);
+    }
+
+    #[test]
     fn rejects_degenerate_state() {
-        assert!(Reserves::from_cl(0.0, 1e18, 500).is_none());
-        assert!(Reserves::from_cl(1e20, 0.0, 500).is_none());
+        assert!(Reserves::from_cl(0.0, 1e18, 500, 10).is_none());
+        assert!(Reserves::from_cl(1e20, 0.0, 500, 10).is_none());
         assert!(Reserves::from_v2(0.0, 1.0, 3000).is_none());
     }
 }
