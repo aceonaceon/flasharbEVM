@@ -16,7 +16,8 @@ timeout_sec = 30
 
 [run]
 db_path = "data/ledger.sqlite"
-poll_ms = 2000
+# dRPC 免費版很容易限速。側錄不需要即時，每 12 秒一次抓一批區塊就好，結果一樣。
+poll_ms = 12000
 # 免費 RPC 多半不給舊區塊的資料，所以不補抓，從現在開始記。
 # 換成 Alchemy 等有歷史資料的 RPC 後，可以改回 6。
 backfill_hours = 0

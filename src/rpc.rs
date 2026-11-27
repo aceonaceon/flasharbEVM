@@ -51,7 +51,7 @@ fn is_rate_limited(msg: &str) -> bool {
 /// token, or its answer does not decode. Fail fast instead of backing off for minutes.
 fn is_permanent(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
-    ["archive", "personal token", "deserialization error", "unknown variant"].iter().any(|k| m.contains(k))
+    ["archive", "personal token", "deserialization error", "unknown variant", "not whitelisted", "not allowed", "-32601"].iter().any(|k| m.contains(k))
 }
 
 /// Errors that mean "ask for fewer blocks", as phrased by common RPC providers.
@@ -312,6 +312,7 @@ mod tests {
     fn archive_refusals_are_not_retried() {
         assert!(is_permanent("HTTP error 403 with body: Archive requests require a personal token"));
         assert!(is_permanent("deserialization error: unknown variant `0x6a`"));
+        assert!(is_permanent("-32601 rpc method is not whitelisted"));
         assert!(!is_permanent("HTTP error 429"));
     }
 
