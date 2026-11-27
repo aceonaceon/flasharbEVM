@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>FlashArb 側錄</title>
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --border: #e3e6eb; --text: #14171c; --muted: #646b76;
+  --pass: #127a4a; --pass-bg: #e3f5ec; --fail: #b4232c; --fail-bg: #fbe8e9;
+  --wait: #8a5a00; --wait-bg: #fdf3dc; --accent: #2a5bd7;
+  --c1: #b4232c; --c2: #e0802b; --c3: #e8b931; --c4: #2a5bd7; --c5: #9aa1ab; --c6: #6c4bc4;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --surface: #171a20; --border: #2a2f38; --text: #e8eaed; --muted: #9aa1ab;
+    --pass: #4cc38a; --pass-bg: #11291e; --fail: #f0686f; --fail-bg: #2e1517;
+    --wait: #e8b931; --wait-bg: #2b2310; --accent: #7aa2ff;
+    --c4: #7aa2ff; --c5: #5f6670;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Segoe UI", sans-serif; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c5); }
+.dot.ok { background: var(--pass); } .dot.bad { background: var(--fail); } .dot.warn { background: var(--wait); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.grid { display: grid; gap: 12px; }
+.grid > * { min-width: 0; }
+.hero { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; margin-bottom: 12px; }
+.verdict { font-size: 30px; font-weight: 700; line-height: 1.2; }
+.verdict.pass { color: var(--pass); } .verdict.fail { color: var(--fail); } .verdict.insufficient { color: var(--wait); }
+.reasons { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+.day { text-align: right; }
+.day b { font-size: 26px; font-variant-numeric: tabular-nums; }
+.bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 6px; width: 180px; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.metrics { grid-template-columns: repeat(3, 1fr); margin-bottom: 12px; }
+.metric .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.metric .label { font-size: 13px; color: var(--muted); }
+.badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; font-weight: 600; }
+.chains { display: flex; gap: 6px; flex-wrap: wrap; }
+.chains button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; }
+.chains button.on { color: var(--text); border-color: var(--text); font-weight: 600; }
+.badge.ref { color: var(--muted); border: 1px solid var(--border); }
+.badge.ok { color: var(--pass); background: var(--pass-bg); } .badge.bad { color: var(--fail); background: var(--fail-bg); }
+.metric .val { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 4px 0 2px; }
+.metric .thr { font-size: 12px; color: var(--muted); }
+.spark { width: 100%; height: 44px; margin-top: 8px; display: block; }
+.health { grid-template-columns: repeat(4, 1fr); margin-bottom: 12px; }
+.stat .k { font-size: 12px; color: var(--muted); } .stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .v.bad { color: var(--fail); } .stat .v.warn { color: var(--wait); }
+.stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--border); }
+.stack > i { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 13px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.two { grid-template-columns: 2fr 1fr; margin-top: 12px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tbl td { padding: 7px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl .num { text-align: right; }
+.scroll { overflow-x: auto; }
+.mono { font-family: var(--mono); font-size: 12px; }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted); }
+.k-arb_same { color: var(--c1); } .k-arb { color: var(--c2); } .k-organic { color: var(--c4); } .k-stale, .k-suspect { color: var(--muted); }
+.empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+.err { color: var(--fail); font-size: 13px; }
+footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
+@media (max-width: 760px) {
+  .metrics, .two { grid-template-columns: 1fr; }
+  .health { grid-template-columns: repeat(2, 1fr); }
+  .hero { grid-template-columns: 1fr; }
+  .day { text-align: left; } .verdict { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>FlashArb 側錄 · <span id="chain-name">Arbitrum</span></h1>
+    <nav class="chains" id="chains"></nav>
+    <span class="pill"><span class="dot" id="live-dot"></span><span id="live-text">連線中…</span></span>
+  </header>
+
+  <section class="card hero">
+    <div>
+      <div class="verdict" id="verdict">—</div>
+      <ul class="reasons" id="reasons"></ul>
+    </div>
+    <div class="day">
+      <div style="font-size:12px;color:var(--muted)">距離第 30 天決策</div>
+      <b id="days-left">—</b> <span style="color:var(--muted)">天</span>
+      <div class="bar"><i id="progress" style="width:0"></i></div>
+    </div>
+  </section>
+
+  <section class="grid metrics" id="metrics"></section>
+
+  <section class="grid health card" id="health"></section>
+
+  <section class="card" style="margin-top:12px">
+    <h2>機會怎麼結束的</h2>
+    <div class="stack" id="stack"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="grid two">
+    <div class="card">
+      <h2>最近的機會</h2>
+      <div class="scroll"><table class="tbl" id="recent"></table></div>
+    </div>
+    <div class="card">
+      <h2>對手排行（吃掉最多的合約）</h2>
+      <table class="tbl" id="closers"></table>
+      <p style="font-size:12px;color:var(--muted);margin:10px 0 0">對手平均 α（priority fee ÷ 毛利）：<b id="alpha" style="color:var(--text)">—</b></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>擁擠度：對手成交的區塊裡，有多少人失敗</h2>
+    <table class="tbl" id="crowding"></table>
+    <p style="font-size:12px;color:var(--muted);margin:10px 0 0">失敗比例越高，代表越多機器人在亂槍打鳥。切換不同鏈比較這一欄，就能檢驗「失敗要付 gas 的鏈比較不擠」。</p>
+  </section>
+
+  <footer>只讀頁面：不持有私鑰、不送出交易。每 30 秒自動更新。<span id="updated"></span></footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const usd = (v) => "$" + (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+const pct = (v) => (v * 100).toFixed(0) + "%";
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "—";
+let explorer = "https://arbiscan.io";
+const scan = (kind, v, label) => v ? `<a class="mono" href="${esc(explorer)}/${kind}/${esc(v)}" target="_blank" rel="noopener">${esc(label ?? short(v))}</a>` : "—";
+const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+const fmtLag = (s) => s < 90 ? `${s} 秒` : s < 5400 ? `${Math.round(s / 60)} 分鐘` : `${(s / 3600).toFixed(1)} 小時`;
+
+const ENDING_COLORS = { arb_same: "var(--c1)", arb_next: "var(--c2)", arb_later: "var(--c3)", organic: "var(--c4)", stale: "var(--c5)", suspect: "var(--c6)" };
+const KIND_LABEL = { arb_same: "同區塊被吃", arb: "被套利者吃", organic: "一般交易抹平", stale: "過期", suspect: "可疑" };
+const VERDICT = { pass: "通過：可以進入合約開發", fail: "未通過", insufficient: "數據收集中" };
+
+function spark(values, threshold, higherBetter) {
+  if (!values.length) return `<svg class="spark"></svg>`;
+  const w = 300, h = 44, pad = 4;
+  const all = values.concat([threshold]);
+  const max = Math.max(...all) * 1.1 || 1, min = Math.min(0, ...all);
+  const x = (i) => values.length === 1 ? w / 2 : pad + (i * (w - 2 * pad)) / (values.length - 1);
+  const y = (v) => h - pad - ((v - min) / (max - min)) * (h - 2 * pad);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const last = values[values.length - 1];
+  const ok = higherBetter ? last >= threshold : last <= threshold;
+  const col = ok ? "var(--pass)" : "var(--fail)";
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="每日趨勢">
+    <line x1="0" x2="${w}" y1="${y(threshold)}" y2="${y(threshold)}" stroke="var(--muted)" stroke-dasharray="3 4" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <circle cx="${x(values.length - 1)}" cy="${y(last)}" r="3" fill="${col}"/>
+  </svg>`;
+}
+
+function render(d) {
+  const v = d.verdict;
+  if (d.chain) { explorer = d.chain.explorer; $("chain-name").textContent = d.chain.name; }
+  $("verdict").className = "verdict " + v.state;
+  $("verdict").textContent = VERDICT[v.state];
+  $("reasons").innerHTML = v.reasons.map((r) => `<li>${esc(r)}</li>`).join("");
+  $("days-left").textContent = v.days_left.toFixed(1);
+  $("progress").style.width = Math.min(100, (v.hours / 24 / 30) * 100).toFixed(1) + "%";
+
+  const series = { median: d.daily.map((x) => x.median_gross), addressable: d.daily.map((x) => x.addressable_usd), same_block: d.daily.map((x) => x.same_block_share) };
+  $("metrics").innerHTML = d.metrics.map((m) => {
+    const fmt = m.unit === "pct" ? pct : usd;
+    return `<div class="card metric">
+      <div class="top"><span class="label">${esc(m.label)}</span>${m.gating ? `<span class="badge ${m.ok ? "ok" : "bad"}">${m.ok ? "達標" : "未達"}</span>` : `<span class="badge ref">參考</span>`}</div>
+      <div class="val">${fmt(m.value)}</div>
+      <div class="thr">門檻 ${m.higher_is_better ? "≥" : "≤"} ${fmt(m.threshold)}${m.key === "addressable" ? "／天" : ""}</div>
+      ${spark(series[m.key] || [], m.threshold, m.higher_is_better)}
+    </div>`;
+  }).join("");
+
+  const h = d.health;
+  const lagCls = h.lag_seconds > 1800 ? "bad" : h.lag_seconds > 300 ? "warn" : "";
+  $("health").innerHTML = [
+    ["已處理到區塊", h.last_block ? h.last_block.toLocaleString() : "—", ""],
+    ["落後鏈頭", h.last_block_ts ? fmtLag(h.lag_seconds) : "—", lagCls],
+    ["已記錄機會", h.opportunities.toLocaleString(), ""],
+    ["已驗證池子 / RPC 錯誤", `${h.pools_verified.toLocaleString()} / ${h.rpc_errors.toLocaleString()}`, ""],
+  ].map(([k, val, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${val}</div></div>`).join("");
+
+  const status = !h.chain_head && h.last_block ? ["", "只看帳本（側錄未執行）"] : !h.last_block ? ["warn", "等待第一批資料"] : lagCls === "bad" ? ["bad", "落後太多"] : h.recording ? ["ok", "錄製中"] : ["warn", "暖機中"];
+  $("live-dot").className = "dot " + status[0];
+  $("live-text").textContent = status[1] + ` · 已記錄 ${v.hours.toFixed(1)} 小時`;
+
+  const total = d.endings.reduce((s, e) => s + e.count, 0);
+  $("stack").innerHTML = total ? d.endings.map((e) => `<i title="${esc(e.label)}" style="width:${(e.count / total) * 100}%;background:${ENDING_COLORS[e.key]}"></i>`).join("") : "";
+  $("legend").innerHTML = total ? d.endings.map((e) => `<span><i class="sw" style="background:${ENDING_COLORS[e.key]}"></i>${esc(e.label)} <b>${e.count.toLocaleString()}</b>（${pct(e.count / total)}）</span>`).join("") : `<span class="empty">還沒有任何機會</span>`;
+
+  $("recent").innerHTML = d.recent.length
+    ? `<tr><th>時間</th><th>交易對</th><th>DEX</th><th class="num">毛利</th><th>結果</th><th>收單者</th></tr>` +
+      d.recent.map((r) => `<tr>
+        <td>${fmtTime(r.ts)}</td>
+        <td>${scan("token", r.token0)} / ${scan("token", r.token1)} ${r.major ? "" : '<span class="tag">長尾</span>'}</td>
+        <td>${esc(r.venues)}</td>
+        <td class="num">${usd(r.gross_usd)}</td>
+        <td class="k-${esc(r.kind)}">${esc(KIND_LABEL[r.kind] || r.kind)}${r.kind === "arb" ? `（+${r.delay_blocks}）` : ""}</td>
+        <td>${r.close_tx ? scan("tx", r.close_tx, short(r.closer || r.close_tx)) : "—"}</td>
+      </tr>`).join("")
+    : `<tr><td class="empty">還沒有任何機會</td></tr>`;
+
+  $("closers").innerHTML = d.closers.length
+    ? `<tr><th>合約</th><th class="num">次數</th><th class="num">佔比</th></tr>` +
+      d.closers.map((c) => `<tr><td>${scan("address", c.address)}</td><td class="num">${c.count.toLocaleString()}</td><td class="num">${pct(c.share)}</td></tr>`).join("")
+    : `<tr><td class="empty">還沒有資料</td></tr>`;
+  $("alpha").textContent = d.alpha == null ? "—" : d.alpha.toFixed(2);
+  const k = d.crowding || {};
+  const opt = (v, f) => (v == null ? "—" : f(v));
+  $("crowding").innerHTML = `
+    <tr><td>抽樣區塊數</td><td class="num">${(k.blocks || 0).toLocaleString()}</td></tr>
+    <tr><td>合約呼叫失敗比例</td><td class="num">${opt(k.reverted_call_share, pct)}</td></tr>
+    <tr><td>失敗吃掉的 gas 比例</td><td class="num">${opt(k.reverted_gas_share, pct)}</td></tr>
+    <tr><td>每個區塊平均失敗幾筆</td><td class="num">${opt(k.reverted_per_block, (v) => v.toFixed(1))}</td></tr>
+    <tr><td>有成交的對手數 / 最大一家佔比</td><td class="num">${k.rivals || 0} / ${opt(k.top_rival_share, pct)}</td></tr>
+    <tr><td>我們失敗一次的成本</td><td class="num">${k.fail_cost_usd ? "$" + k.fail_cost_usd.toFixed(3) : "免費"}</td></tr>
+    <tr><td>撿到一單（中位數）能付幾次失敗</td><td class="num">${opt(k.misses_per_win, (v) => v.toFixed(0) + " 次")}</td></tr>`;
+  $("updated").textContent = " 最後更新：" + new Date().toLocaleTimeString("zh-TW", { hour12: false });
+}
+
+let chain = null;
+try { chain = localStorage.getItem("flasharb-chain"); } catch (_) {}
+async function loadChains() {
+  try {
+    const list = await (await fetch("api/chains", { cache: "no-store" })).json();
+    if (!list.includes(chain)) chain = list[0];
+    $("chains").innerHTML = list.length < 2 ? "" : list.map((c) =>
+      `<button type="button" data-c="${esc(c)}" class="${c === chain ? "on" : ""}">${esc(c)}</button>`).join("");
+    $("chains").querySelectorAll("button").forEach((b) => b.onclick = () => {
+      chain = b.dataset.c;
+      try { localStorage.setItem("flasharb-chain", chain); } catch (_) {}
+      loadChains();
+    });
+  } catch (_) {}
+  load();
+}
+async function load() {
+  try {
+    const r = await fetch("api/summary" + (chain ? "?chain=" + encodeURIComponent(chain) : ""), { cache: "no-store" });
+    if (!r.ok) throw new Error(await r.text());
+    render(await r.json());
+  } catch (e) {
+    $("live-dot").className = "dot bad";
+    $("live-text").textContent = "讀不到資料：" + e.message.slice(0, 80);
+  }
+}
+loadChains();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

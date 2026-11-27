@@ -1,0 +1,87 @@
+# FlashArb 側錄器：Optimism（只記錄、不送單）
+# 失敗的交易要付 gas（金額很小）。拿來檢驗「失敗要付錢 → 套利者比較少」這個假設。
+
+[chain]
+name = "Optimism"
+explorer = "https://optimistic.etherscan.io"
+
+[rpc]
+# publicnode 免費版不給「不指定合約地址」的全鏈事件查詢，所以用 dRPC 的免費公開節點
+url = "https://optimism.drpc.org"
+max_rps = 3
+initial_log_range = 50
+max_log_range = 1000
+timeout_sec = 30
+
+[run]
+db_path = "data/ledger.sqlite"
+# dRPC 免費版很容易限速。側錄不需要即時，每 12 秒一次抓一批區塊就好，結果一樣。
+poll_ms = 12000
+# 免費 RPC 多半不給舊區塊的資料，所以不補抓，從現在開始記。
+# 換成 Alchemy 等有歷史資料的 RPC 後，可以改回 6。
+backfill_hours = 0
+warmup_minutes = 10
+
+[detect]
+# 約 2 秒一個區塊：300 個區塊約 10 分鐘
+stale_blocks = 300
+min_gross_usd = 0.10
+gas_cost_usd = 0.02
+fail_cost_usd = 0.005
+suspect_gap_pct = 30.0
+min_pool_liquidity_usd = 2000.0
+max_closer_tx_lookups = 400
+
+[gate]
+min_addressable_usd_per_day = 1.0
+min_median_gross_usd = 0.30
+max_same_block_share = 0.5
+
+[tokens]
+weth = "0x4200000000000000000000000000000000000006"
+stables = [
+  "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", # USDC
+  "0x7F5c764cBc14f9669B88837ca1490cCa17c31607", # USDC.e
+  "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", # USDT
+]
+stables18 = [
+  "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", # DAI
+]
+majors = [
+  "0x4200000000000000000000000000000000000006", # WETH
+  "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", # USDC
+  "0x7F5c764cBc14f9669B88837ca1490cCa17c31607", # USDC.e
+  "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", # USDT
+  "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", # DAI
+  "0x4200000000000000000000000000000000000042", # OP
+  "0x68f180fcCe6836688e9084f035309E29Bf0A2095", # WBTC
+]
+
+[discovery]
+auto_accept_unknown_factories = true
+
+[[factories]]
+name = "uniswap_v3"
+kind = "univ3"
+address = "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+
+[[factories]]
+name = "velodrome_cl"
+kind = "aero_cl"
+address = "0xCc0bDDB707055e04e497aB22a59c2aF4391cd12F"
+
+[[factories]]
+name = "velodrome_v2"
+kind = "aero_v2"
+address = "0xF1046053aa5682b4F9a81b5481394DA16BE5FF5a"
+fee_bps = 30
+
+[[factories]]
+name = "uniswap_v2"
+kind = "univ2"
+address = "0x0c3c1c532F1e39EdF36BE9Fe0bE1410313E074Bf"
+fee_bps = 30
+
+[web]
+enabled = true
+bind = "0.0.0.0:8088"

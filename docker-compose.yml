@@ -1,0 +1,150 @@
+# 側錄器 + 狀態網頁。不需要任何私鑰或錢包。
+# 映像檔由 GitHub Actions 編好放在 GHCR，主機只負責拉下來跑（不在主機上編譯 Rust）。
+services:
+  shadow:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow
+    restart: unless-stopped
+    environment:
+      # 想換成 Alchemy 免費方案等更快的 RPC，就在 .env 裡設定 FLASHARB_RPC_URL
+      - FLASHARB_RPC_URL=${FLASHARB_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      # named volume：第一次建立時沿用映像檔裡 /app/data 的擁有者（非 root 使用者），不會有權限問題
+      - flasharb-data:/app/data
+      - ./config.toml:/app/config.toml:ro
+    # 網頁只在 compose 內部網路開放（port 8088），不對外開 port。
+    expose:
+      - "8088"
+    mem_limit: 384m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # 其他鏈：同一個映像檔，各自一份設定檔與帳本。Arbitrum 的網頁可以切換過去看。
+  shadow-bsc:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-bsc
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_BSC_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-bsc-data:/app/data
+      - ./configs/bsc.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-eth:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-eth
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_ETH_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-eth-data:/app/data
+      - ./configs/ethereum.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-base:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-base
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_BASE_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-base-data:/app/data
+      - ./configs/base.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 384m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-op:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-op
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_OP_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-op-data:/app/data
+      - ./configs/optimism.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  shadow-polygon:
+    image: ghcr.io/aceonaceon/flasharbevm:${FLASHARB_TAG:-main}
+    container_name: flasharb-shadow-polygon
+    restart: unless-stopped
+    environment:
+      - FLASHARB_RPC_URL=${FLASHARB_POLYGON_RPC_URL:-}
+      - RUST_LOG=info
+    volumes:
+      - flasharb-polygon-data:/app/data
+      - ./configs/polygon.toml:/app/config.toml:ro
+    expose:
+      - "8088"
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # Cloudflare Tunnel：把子網域轉到 http://shadow:8088。
+  # 在 Cloudflare Zero Trust 建好 tunnel 後，把 token 寫進 .env 的 TUNNEL_TOKEN。
+  # 登入保護用 Cloudflare Access（只放行你的 email），在 Cloudflare 後台設定。
+  # 有 token 之後，在 .env 加 COMPOSE_PROFILES=tunnel 才會啟動；側錄器本身不依賴它。
+  tunnel:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    container_name: flasharb-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
+    depends_on:
+      - shadow
+    mem_limit: 128m
+
+volumes:
+  flasharb-data:
+  flasharb-bsc-data:
+  flasharb-eth-data:
+  flasharb-base-data:
+  flasharb-op-data:
+  flasharb-polygon-data:

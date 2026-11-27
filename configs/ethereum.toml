@@ -1,0 +1,90 @@
+# FlashArb 側錄器：Ethereum（只記錄、不送單）
+# 送單可走 Flashbots 這類打包服務，失敗不付 gas；gas 貴，只有大單才划算。
+
+[chain]
+name = "Ethereum"
+explorer = "https://etherscan.io"
+
+[rpc]
+# 免費公開 RPC；可用環境變數 FLASHARB_RPC_URL 覆蓋
+url = "https://ethereum-rpc.publicnode.com"
+max_rps = 4
+initial_log_range = 50
+max_log_range = 1000
+timeout_sec = 30
+
+[run]
+db_path = "data/ledger.sqlite"
+poll_ms = 2000
+# 免費 RPC 多半不給舊區塊的資料，所以不補抓，從現在開始記。
+# 換成 Alchemy 等有歷史資料的 RPC 後，可以改回 6。
+backfill_hours = 0
+warmup_minutes = 10
+
+[detect]
+# 12 秒一個區塊：50 個區塊約 10 分鐘
+stale_blocks = 50
+# 主網 gas 貴，只看夠大的單
+min_gross_usd = 2.0
+gas_cost_usd = 1.0
+suspect_gap_pct = 30.0
+min_pool_liquidity_usd = 2000.0
+max_closer_tx_lookups = 400
+
+[gate]
+# 只有「扣完 gas 每天能撿多少」決定結論；另外兩項只當參考
+min_addressable_usd_per_day = 1.0
+min_median_gross_usd = 0.30
+max_same_block_share = 0.5
+
+[tokens]
+weth = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+stables = [
+  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", # USDC
+  "0xdac17f958d2ee523a2206206994597c13d831ec7", # USDT
+]
+stables18 = [
+  "0x6b175474e89094c44da98b954eedeac495271d0f", # DAI
+]
+majors = [
+  "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", # WETH
+  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", # USDC
+  "0xdac17f958d2ee523a2206206994597c13d831ec7", # USDT
+  "0x6b175474e89094c44da98b954eedeac495271d0f", # DAI
+  "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", # WBTC
+]
+
+[discovery]
+auto_accept_unknown_factories = true
+
+# kind: univ3 | algebra | aero_cl | univ2 | aero_v2（PancakeSwap v3 與 Uniswap v3 同為 univ3）
+[[factories]]
+name = "uniswap_v3"
+kind = "univ3"
+address = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
+
+[[factories]]
+name = "sushi_v3"
+kind = "univ3"
+address = "0xbaceb8ec6b9355dfc0269c18bac9d6e2bdc29c4f"
+
+[[factories]]
+name = "pancake_v3"
+kind = "univ3"
+address = "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865"
+
+[[factories]]
+name = "uniswap_v2"
+kind = "univ2"
+address = "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"
+fee_bps = 30
+
+[[factories]]
+name = "sushi_v2"
+kind = "univ2"
+address = "0xc0aee478e3658e2610c5f7a4a2e1777ce9e4f2ac"
+fee_bps = 30
+
+[web]
+enabled = true
+bind = "0.0.0.0:8088"
